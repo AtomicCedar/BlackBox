@@ -311,7 +311,7 @@ public class XposedInterfaceImpl implements XposedInterface {
         private Object doProceed() throws Throwable {
             mProceedRan = true;
             if (mIndex >= mEntries.length) {
-                // 链尾：Pine backup 直接调原始实现，绕过所有 hook
+                // 链尾：调原始实现，绕过所有 hook
                 try {
                     return mFrame.invokeOriginalMethod(mThisObject, mArgs);
                 } catch (InvocationTargetException e) {

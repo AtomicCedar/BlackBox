@@ -428,6 +428,13 @@ public class PackageManagerCompat {
         ai.processName = BPackageManagerService.fixProcessName(p.packageName, ai.packageName);
         ai.publicSourceDir = sourceDir;
         ai.sourceDir = sourceDir;
+        // 多 APK（split）包：把记录的 split 路径一并返回（GMS/Play 商店按系统方式
+        // 导入时引用宿主 split 文件），LoadedApk 建 ClassLoader、资源加载都依赖它。
+        // 旧安装数据没有显式 splitSourceDirs 字段时回退到安装时刻的 applicationInfo 快照
+        String[] splits = p.splitSourceDirs != null ? p.splitSourceDirs
+                : p.applicationInfo != null ? p.applicationInfo.splitSourceDirs : null;
+        ai.splitSourceDirs = splits;
+        ai.splitPublicSourceDirs = splits;
         ai.uid = p.mExtras.appId;
 //        ai.uid = baseApplication.uid;
 
@@ -493,6 +500,13 @@ public class PackageManagerCompat {
         if (ps != null) {
             AssetManager assets = BRAssetManager.get()._new();
             BRAssetManager.get(assets).addAssetPath(ps.pkg.baseCodePath);
+            String[] splits = ps.pkg.splitSourceDirs != null ? ps.pkg.splitSourceDirs
+                    : ps.pkg.applicationInfo != null ? ps.pkg.applicationInfo.splitSourceDirs : null;
+            if (splits != null) {
+                for (String split : splits) {
+                    BRAssetManager.get(assets).addAssetPath(split);
+                }
+            }
             Resources hostRes = context.getResources();
             return new Resources(assets, hostRes.getDisplayMetrics(), hostRes.getConfiguration());
         }

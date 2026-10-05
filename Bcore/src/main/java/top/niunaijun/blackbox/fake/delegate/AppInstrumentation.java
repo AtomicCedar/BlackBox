@@ -16,6 +16,7 @@ import black.android.app.BRActivity;
 import black.android.app.BRActivityThread;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.BActivityThread;
+import top.niunaijun.blackbox.core.NativeCore;
 import top.niunaijun.blackbox.fake.hook.HookManager;
 import top.niunaijun.blackbox.fake.hook.IInjectHook;
 import top.niunaijun.blackbox.fake.service.HCallbackProxy;
@@ -125,12 +126,18 @@ public final class AppInstrumentation extends BaseInstrumentationDelegate implem
     @Override
     public void callActivityOnCreate(Activity activity, Bundle icicle, PersistableBundle persistentState) {
         checkActivity(activity);
+        // 补扫 GOT：Activity 类已加载（newActivity 时 static 块已 System.loadLibrary），
+        // 此时应用 so 全部就位，把它们的 GOT 打上补丁——覆盖系统 dlopen 加载的
+        // 库（libnativehelper 直接调真实 dlopen，不经 my_dlopen，install 补扫不触发）。
+        // onCreate 里应用的 native 检测/IO 调用因此走容器包装（access 祖先拦截等）。
+        NativeCore.rescanIOHook();
         super.callActivityOnCreate(activity, icicle, persistentState);
     }
 
     @Override
     public void callActivityOnCreate(Activity activity, Bundle icicle) {
         checkActivity(activity);
+        NativeCore.rescanIOHook();
         super.callActivityOnCreate(activity, icicle);
     }
 

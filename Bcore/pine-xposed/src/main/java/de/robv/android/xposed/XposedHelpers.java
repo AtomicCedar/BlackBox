@@ -31,6 +31,8 @@ import java.util.zip.ZipFile;
 
 import dalvik.system.DexFile;
 
+import top.canyie.pine.utils.HiddenApiCompat;
+
 import external.org.apache.commons.lang3.ClassUtils;
 import external.org.apache.commons.lang3.reflect.MemberUtils;
 
@@ -137,7 +139,7 @@ public final class XposedHelpers {
 
 	private static Field findFieldRecursiveImpl(Class<?> clazz, String fieldName) throws NoSuchFieldException {
 		try {
-			return clazz.getDeclaredField(fieldName);
+			return HiddenApiCompat.findDeclaredField(clazz, fieldName);
 		} catch (NoSuchFieldException e) {
 			while (true) {
 				clazz = clazz.getSuperclass();
@@ -145,7 +147,7 @@ public final class XposedHelpers {
 					break;
 
 				try {
-					return clazz.getDeclaredField(fieldName);
+					return HiddenApiCompat.findDeclaredField(clazz, fieldName);
 				} catch (NoSuchFieldException ignored) {}
 			}
 			throw e;
@@ -164,7 +166,7 @@ public final class XposedHelpers {
 	public static Field findFirstFieldByExactType(Class<?> clazz, Class<?> type) {
 		Class<?> clz = clazz;
 		do {
-			for (Field field : clz.getDeclaredFields()) {
+			for (Field field : HiddenApiCompat.getDeclaredFields(clz)) {
 				if (field.getType() == type) {
 					field.setAccessible(true);
 					return field;
@@ -337,7 +339,7 @@ public final class XposedHelpers {
 		}
 
 		try {
-			Method method = clazz.getDeclaredMethod(methodName, parameterTypes);
+			Method method = HiddenApiCompat.findDeclaredMethod(clazz, methodName, parameterTypes);
 			method.setAccessible(true);
 			methodCache.put(fullMethodName, method);
 			return method;
@@ -360,7 +362,7 @@ public final class XposedHelpers {
 	 */
 	public static Method[] findMethodsByExactParameters(Class<?> clazz, Class<?> returnType, Class<?>... parameterTypes) {
 		List<Method> result = new LinkedList<>();
-		for (Method method : clazz.getDeclaredMethods()) {
+		for (Method method : HiddenApiCompat.getDeclaredMethods(clazz)) {
 			if (returnType != null && returnType != method.getReturnType())
 				continue;
 
@@ -418,7 +420,7 @@ public final class XposedHelpers {
 		Class<?> clz = clazz;
 		boolean considerPrivateMethods = true;
 		do {
-			for (Method method : clz.getDeclaredMethods()) {
+			for (Method method : HiddenApiCompat.getDeclaredMethods(clz)) {
 				// don't consider private methods of superclasses
 				if (!considerPrivateMethods && Modifier.isPrivate(method.getModifiers()))
 					continue;
@@ -601,7 +603,7 @@ public final class XposedHelpers {
 		}
 
 		try {
-			Constructor<?> constructor = clazz.getDeclaredConstructor(parameterTypes);
+			Constructor<?> constructor = HiddenApiCompat.findDeclaredConstructor(clazz, parameterTypes);
 			constructor.setAccessible(true);
 			constructorCache.put(fullConstructorName, constructor);
 			return constructor;
@@ -655,7 +657,7 @@ public final class XposedHelpers {
 		} catch (NoSuchMethodError ignored) {}
 
 		Constructor<?> bestMatch = null;
-		Constructor<?>[] constructors = clazz.getDeclaredConstructors();
+		Constructor<?>[] constructors = HiddenApiCompat.getDeclaredConstructors(clazz);
 		for (Constructor<?> constructor : constructors) {
 			// compare name and parameters
 			if (ClassUtils.isAssignable(parameterTypes, constructor.getParameterTypes(), true)) {
@@ -1685,7 +1687,7 @@ public final class XposedHelpers {
 		Class<?> clazz = method.getDeclaringClass().getSuperclass();
 		while (clazz != null) {
 			try {
-				Method superMethod = clazz.getDeclaredMethod(name, parameters);
+				Method superMethod = HiddenApiCompat.findDeclaredMethod(clazz, name, parameters);
 				modifiers = superMethod.getModifiers();
 				if (!Modifier.isPrivate(modifiers) && !Modifier.isAbstract(modifiers)) {
 					return superMethod;
@@ -1704,7 +1706,7 @@ public final class XposedHelpers {
 	 */
 	/*package*/ static Set<Method> getOverriddenMethods(Class<?> clazz) {
 		Set<Method> methods = new HashSet<>();
-		for (Method method : clazz.getDeclaredMethods()) {
+		for (Method method : HiddenApiCompat.getDeclaredMethods(clazz)) {
 			Method overridden = getOverriddenMethod(method);
 			if (overridden != null) {
 				methods.add(overridden);

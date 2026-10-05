@@ -46,7 +46,7 @@ public final class ReflectionHelper {
     public static Field findField(Class<?> c, String name) {
         for (;c != null;c = c.getSuperclass()) {
             try {
-                Field field = c.getDeclaredField(name);
+                Field field = HiddenApiCompat.findDeclaredField(c, name);
                 field.setAccessible(true);
                 return field;
             } catch (NoSuchFieldException ignored) {
@@ -65,7 +65,7 @@ public final class ReflectionHelper {
     public static Method findMethod(Class<?> c, String name, Class<?>... paramTypes) {
         for (;c != null;c = c.getSuperclass()) {
             try {
-                Method method = c.getDeclaredMethod(name, paramTypes);
+                Method method = HiddenApiCompat.findDeclaredMethod(c, name, paramTypes);
                 method.setAccessible(true);
                 return method;
             } catch (NoSuchMethodException ignored) {
@@ -74,9 +74,10 @@ public final class ReflectionHelper {
         return null;
     }
 
+    @SuppressWarnings("unchecked")
     public static <T> Constructor<T> getConstructor(Class<T> c, Class<?>... paramTypes) {
         try {
-            Constructor<T> constructor = c.getDeclaredConstructor(paramTypes);
+            Constructor<T> constructor = (Constructor<T>) HiddenApiCompat.findDeclaredConstructor(c, paramTypes);
             forceAccessible(constructor);
             return constructor;
         } catch (NoSuchMethodException e) {
@@ -84,9 +85,10 @@ public final class ReflectionHelper {
         }
     }
 
+    @SuppressWarnings("unchecked")
     public static <T> Constructor<T> findConstructor(Class<T> c, Class<?>... paramTypes) {
         try {
-            Constructor<T> constructor = c.getDeclaredConstructor(paramTypes);
+            Constructor<T> constructor = (Constructor<T>) HiddenApiCompat.findDeclaredConstructor(c, paramTypes);
             forceAccessible(constructor);
             return constructor;
         } catch (NoSuchMethodException ignored) {

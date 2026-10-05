@@ -125,6 +125,12 @@ public class IOCore {
             rule.put(String.format("/data/data/%s", packageName), packageInfo.dataDir);
             rule.put(String.format("/data/user/%d/%s", systemUserId, packageName), packageInfo.dataDir);
 
+            // sourceDir 伪装成 /data/app/<pkg> 形态后，该路径的 open 必须落回真实
+            // APK（blackbox/data/app/<pkg>），否则应用读自己 APK 会失败
+            if (packageInfo.sourceDir != null) {
+                rule.put(String.format("/data/app/%s", packageName), packageInfo.sourceDir);
+            }
+
             if (BlackBoxCore.getContext().getExternalCacheDir() != null && context.getExternalCacheDir() != null) {
                 File external = BEnvironment.getExternalUserDir(BActivityThread.getUserId());
 
@@ -147,9 +153,6 @@ public class IOCore {
                 blackRule.add("/sdcard/Pictures");
                 blackRule.add(String.format("/storage/emulated/%d/Pictures", systemUserId));
             }
-            if (BlackBoxCore.get().isHideRoot()) {
-                hideRoot(rule);
-            }
             proc(rule);
         } catch (Exception e) {
             e.printStackTrace();
@@ -161,19 +164,6 @@ public class IOCore {
             get().addBlackRedirect(s);
         }
         NativeCore.enableIO();
-    }
-
-    private void hideRoot(Map<String, String> rule) {
-        rule.put("/system/app/Superuser.apk", "/system/app/Superuser.apk-fake");
-        rule.put("/sbin/su", "/sbin/su-fake");
-        rule.put("/system/bin/su", "/system/bin/su-fake");
-        rule.put("/system/xbin/su", "/system/xbin/su-fake");
-        rule.put("/data/local/xbin/su", "/data/local/xbin/su-fake");
-        rule.put("/data/local/bin/su", "/data/local/bin/su-fake");
-        rule.put("/system/sd/xbin/su", "/system/sd/xbin/su-fake");
-        rule.put("/system/bin/failsafe/su", "/system/bin/failsafe/su-fake");
-        rule.put("/data/local/su", "/data/local/su-fake");
-        rule.put("/su/bin/su", "/su/bin/su-fake");
     }
 
     private void proc(Map<String, String> rule) {

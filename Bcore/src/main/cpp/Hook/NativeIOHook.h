@@ -19,6 +19,21 @@ public:
     // 扫描当前已加载库并打补丁。可重复调用（新库加载后刷新），幂等。
     static void install();
 
+    // /proc/*/maps 扩展规则：mode 0=删行（行内含 key 则丢弃），1=改行（行内
+    // key 替换为 value）。规则表为进程级，Java 侧按应用在启动时序中配置。
+    // 引擎 so 名单（libpine/libblackbox）始终生效，不受此表影响。
+    static void addMapsRule(int mode, const char *key, const char *value);
+
+    // 清空扩展规则表（每个应用进程启动时调用，避免跨应用残留）
+    static void clearMapsRules();
+
+    // 设备伪装属性：key -> value，命中 __system_property_get 时返回伪装值。
+    // 进程级，Java 侧按应用在启动时序中注册。空表不拦截任何属性。
+    static void addPropRule(const char *key, const char *value);
+
+    // 清空设备伪装属性表（每个应用进程启动时调用，避免跨应用残留）
+    static void clearPropRules();
+
     // libxposed 102 native 模块的 hook_func：按 func 真实地址反查导出符号名，
     // 对 /data 下所有库（含后续加载的）改写 GOT 指向 replace，backup 带回真实
     // 函数地址。仅 arm64 实现（依赖 GOT 补丁通路），其他架构返回 false。

@@ -4,8 +4,10 @@ import android.Manifest;
 import android.app.ActivityManager;
 import android.app.IServiceConnection;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
@@ -557,7 +559,38 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             if (args[getPermissionIndex()] != null) {
                 args[getPermissionIndex()] = null;
             }
+            // Android 13+ (targetSdk 33+) 动态注册非系统广播必须显式声明 exported：
+            // 分身体以宿主进程身份（targetSdk 36）调用系统，未传 flags 会被系统直接拒绝；
+            // 按 filter 判定补位：系统广播（action 以 android. 开头）NOT_EXPORTED，自定义广播 EXPORTED
+            if (BuildCompat.isS() && args.length > 7) {
+                Object flagsObj = args[args.length - 1];
+                int flags = flagsObj == null ? 0 : (Integer) flagsObj;
+                if ((flags & (Context.RECEIVER_EXPORTED | Context.RECEIVER_NOT_EXPORTED)) == 0) {
+                    IntentFilter filter = null;
+                    for (Object arg : args) {
+                        if (arg instanceof IntentFilter) {
+                            filter = (IntentFilter) arg;
+                            break;
+                        }
+                    }
+                    args[args.length - 1] = isSystemBroadcast(filter)
+                            ? Context.RECEIVER_NOT_EXPORTED : Context.RECEIVER_EXPORTED;
+                }
+            }
             return method.invoke(who, args);
+        }
+
+        private boolean isSystemBroadcast(IntentFilter filter) {
+            if (filter == null || filter.countActions() == 0) {
+                return false;
+            }
+            for (int i = 0; i < filter.countActions(); i++) {
+                String action = filter.getAction(i);
+                if (action == null || !action.startsWith("android.")) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         public int getReceiverIndex() {

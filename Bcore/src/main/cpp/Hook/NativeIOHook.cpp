@@ -20,6 +20,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <android/dlext.h>
@@ -27,9 +28,12 @@
 #include <dlfcn.h>
 #include <elf.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <link.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include "../IO.h"
@@ -47,6 +51,199 @@ inline void logDenied(const char *symbol, const char *path) {
     if (path != nullptr) {
         ALOGD("NativeIOHook: %s EACCES for %s", symbol, path);
     }
+}
+
+// ---------------------------------------------------------------------------
+// /proc/*/maps 行伪装：引擎 so（libpine/libblackbox）始终删行；扩展规则表
+// 支持删行/改行（Java 侧按应用配置，进程级）。检测方读 maps 找 hook 引擎时
+// 命中名单的行直接丢弃或改写，其余原样输出到匿名内存 fd（memfd）。原理参考
+// RatelModule Foundation/MapsRedirector 与 FakeXposed IoRedirect。
+// ---------------------------------------------------------------------------
+// real_* 指针定义在下方"真实函数指针与包装函数"区，此处 extern 前向声明
+extern int (*real_open)(const char *, int, ...);
+extern int (*real_openat)(int, const char *, int, ...);
+
+static const char *const kHiddenMapsSo[] = {
+    "libpine.so",
+    "libblackbox.so",
+};
+
+static bool isHiddenMapsLine(const char *line) {
+    for (const char *const name : kHiddenMapsSo) {
+        if (strstr(line, name) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 扩展 maps 规则：mode 0=删行（行内含 key 则丢弃），1=改行（行内 key 替换为 value）
+struct MapsRule {
+    int mode;
+    std::string key;
+    std::string value;
+};
+static std::vector<MapsRule> g_mapsRules;
+static std::mutex g_mapsRulesMutex;
+
+// ---------------------------------------------------------------------------
+// 设备伪装属性表：key -> value，Java 侧 DeviceSpoofConfig 通过 JNI 注册，
+// __system_property_get / __system_property_find 命中时返回伪装值。
+// 覆盖 Java 层 SystemProperties.get hook 没生效的通路（native 直读属性）。
+// ---------------------------------------------------------------------------
+struct PropRule {
+    std::string key;
+    std::string value;
+};
+static std::vector<PropRule> g_propRules;
+static std::mutex g_propRulesMutex;
+
+static const char *lookupProp(const char *name) {
+    if (name == nullptr) return nullptr;
+    std::lock_guard<std::mutex> lock(g_propRulesMutex);
+    for (const auto &rule : g_propRules) {
+        if (rule.key == name) return rule.value.c_str();
+    }
+    return nullptr;
+}
+
+// 处理一行 maps：返回 true=保留（out 为处理后行内容），false=整行丢弃。
+// 删行规则匹配原始行；改行规则在 out 上按规则顺序累积替换。
+static bool applyMapsRules(const char *line, std::string &out) {
+    out = line;
+    std::lock_guard<std::mutex> lock(g_mapsRulesMutex);
+    for (const auto &rule : g_mapsRules) {
+        if (rule.mode == 0) {
+            if (strstr(line, rule.key.c_str()) != nullptr) {
+                return false;
+            }
+        } else if (rule.mode == 1 && !rule.key.empty()) {
+            size_t pos = out.find(rule.key);
+            if (pos != std::string::npos) {
+                out.replace(pos, rule.key.size(), rule.value);
+            }
+        }
+    }
+    return true;
+}
+
+static bool isProcMapsPath(const char *path) {
+    if (path == nullptr || strncmp(path, "/proc/", 6) != 0) {
+        return false;
+    }
+    size_t len = strlen(path);
+    return (len >= 5 && strcmp(path + len - 5, "/maps") == 0) ||
+           (len >= 6 && strcmp(path + len - 6, "/smaps") == 0);
+}
+
+// 读真实 maps 生成过滤副本（memfd）。返回 fake fd（>=0）；memfd 不可用时返回原 fd
+static int createFakeMaps(int realFd) {
+#ifdef __NR_memfd_create
+    int fakeFd = static_cast<int>(syscall(__NR_memfd_create, "blackbox_maps", 1 /*MFD_CLOEXEC*/));
+#else
+    int fakeFd = -1;
+#endif
+    if (fakeFd < 0) {
+        return realFd; // memfd 不可用：返回原样，宁可不藏也不破坏调用
+    }
+    char line[PATH_MAX];
+    char *p = line;
+    size_t n = PATH_MAX - 1;
+    ssize_t r;
+    while ((r = TEMP_FAILURE_RETRY(read(realFd, p, n))) > 0) {
+        p[r] = '\0';
+        p = line;
+        char *e;
+        while ((e = strchr(p, '\n')) != nullptr) {
+            e[0] = '\0';
+            if (isHiddenMapsLine(p)) {
+                p = e + 1; // 引擎 so 行：丢弃
+                continue;
+            }
+            std::string out;
+            if (applyMapsRules(p, out)) {
+                e[0] = '\n';
+                write(fakeFd, out.data(), out.size());
+                write(fakeFd, "\n", 1);
+            }
+            p = e + 1;
+        }
+        const size_t remain = strlen(p);
+        if (remain <= PATH_MAX / 2) {
+            memcpy(line, p, remain);
+        } else {
+            memmove(line, p, remain);
+        }
+        p = line + remain;
+        n = PATH_MAX - 1 - remain;
+    }
+    lseek(fakeFd, 0, SEEK_SET);
+    return fakeFd;
+}
+
+// 返回值：0=非 maps 路径（走正常逻辑）；>0=替换后的 fd；<0=打开失败
+static int redirectProcMaps(const char *path, int flags, int mode) {
+    if (!isProcMapsPath(path) || (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND))) {
+        return 0;
+    }
+    int realFd = real_open(path, flags, mode);
+    if (realFd < 0) {
+        return -1;
+    }
+    int fakeFd = createFakeMaps(realFd);
+    if (fakeFd != realFd) {
+        close(realFd); // 使用副本，释放真实 fd
+    }
+    return fakeFd;
+}
+
+static int redirectProcMapsAt(int dirfd, const char *path, int flags, int mode) {
+    if (dirfd != AT_FDCWD || !isProcMapsPath(path) ||
+        (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC | O_APPEND))) {
+        return 0;
+    }
+    int realFd = real_openat(dirfd, path, flags, mode);
+    if (realFd < 0) {
+        return -1;
+    }
+    int fakeFd = createFakeMaps(realFd);
+    if (fakeFd != realFd) {
+        close(realFd);
+    }
+    return fakeFd;
+}
+
+// ---------------------------------------------------------------------------
+// 容器数据目录隐藏：分身体直接访问宿主数据目录时把 blackbox/（容器数据根，
+// 含分身/模块 APK）伪装成不存在。检测方扫宿主数据目录找容器痕迹时全为 ENOENT。
+// 分身体正常 IO 走虚拟路径重定向（原始路径是 /data/data/<分身pkg> 等，不含这些
+// 前缀），不受影响；黑盒内部加载 APK/模块走 libjavacore（不经 GOT），同样不受影响。
+// ---------------------------------------------------------------------------
+static bool isContainerDataPath(const char *path) {
+    if (path == nullptr) {
+        return false;
+    }
+    static const char *const kHostDataRoots[] = {
+        "/data/data/top.niunaijun.blackbox/",
+        "/data/user/0/top.niunaijun.blackbox/",
+        "/data/user_de/0/top.niunaijun.blackbox/",
+    };
+    for (const char *root : kHostDataRoots) {
+        const size_t len = strlen(root);
+        if (strncmp(path, root, len) == 0) {
+            return strncmp(path + len, "blackbox", 8) == 0;
+        }
+    }
+    return false;
+}
+
+// 返回 0=放行；-1=命中容器数据目录（调用方直接返回 -1, errno 已置 ENOENT）
+static int denyIfContainerDataPath(const char *path) {
+    if (isContainerDataPath(path)) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +287,168 @@ int (*real_fstat)(int, struct stat *);
 int (*real_fstat64)(int, struct stat64 *);
 int (*real_faccessat2)(int, const char *, int, int);
 
+// 系统属性读取：__system_property_get 是 native 侧 SystemProperties.get 的底层实现，
+// Java 层 hook 挂不上时用 GOT 包装兜底。__system_property_find 返回的 prop_info
+// 里名字和值都带偏移，找到后直接按伪装值覆写。
+int (*real___system_property_get)(const char *, char *);
+
+int my___system_property_get(const char *name, char *value) {
+    const char *spoof = lookupProp(name);
+    if (spoof != nullptr) {
+        int len = static_cast<int>(strlen(spoof));
+        if (len >= PROP_VALUE_MAX) len = PROP_VALUE_MAX - 1;
+        memcpy(value, spoof, len + 1);
+        return len;
+    }
+    return real___system_property_get(name, value);
+}
+
+// ---------------------------------------------------------------------------
+// dl_iterate_phdr 模块路径伪装：多开检测常用 dl_iterate_phdr 遍历已加载 so，
+// 容器分身体的模块路径形如 /data/user/0/<宿主>/blackbox/data/app/<pkg>/lib/...，
+// "/blackbox/" 是容器 virtual 目录的暴露特征。包装回调里把模块名还原成
+// /data/app/<pkg>/lib/... 的正常安装形态，隐藏容器目录特征。
+// 容器自身 install 扫库走 libblackbox 自身 GOT（未被改写），不经过本包装。
+// ---------------------------------------------------------------------------
+int (*real_dl_iterate_phdr)(int (*callback)(struct dl_phdr_info *, size_t, void *),
+                            void *data);
+
+struct DlIterateContext {
+    int (*userCallback)(struct dl_phdr_info *, size_t, void *);
+    void *userData;
+};
+
+// ---------------------------------------------------------------------------
+// 虚拟路径双向映射：容器分身真实路径（/data/user/0/黑盒/blackbox/...）与其
+// 伪装路径（应用视角 / 正常安装形态）的登记表。dl_iterate_phdr / readlink
+// 返回伪装路径隐藏特征；拿伪装路径再 open 时反查还原成真实路径，
+// 消除"拿伪装路径打开失败"的副作用（正常引擎/框架拿路径定位文件不受影响）。
+// 登记来源：1) 模块路径（install 扫描 dlpi_name 含 /blackbox/）
+//           2) open 重定向命中（数据文件真实↔应用视角）
+// ---------------------------------------------------------------------------
+static std::unordered_map<std::string, std::string> g_hiddenPathMap;  // 真实 -> 伪装
+static std::mutex g_hiddenPathMutex;
+
+static void registerHiddenPath(const char *real, const char *masked) {
+    if (real == nullptr || masked == nullptr || real[0] == '\0' || masked[0] == '\0') {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_hiddenPathMutex);
+    g_hiddenPathMap[real] = masked;
+}
+
+// 真实 -> 伪装（返回 map 内引用，仅插入不删除，指针稳定）
+static const char *lookupMasked(const char *real) {
+    if (real == nullptr) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(g_hiddenPathMutex);
+    auto it = g_hiddenPathMap.find(std::string(real));
+    return it == g_hiddenPathMap.end() ? nullptr : it->second.c_str();
+}
+
+// 伪装 -> 真实（反查，条目少直接线性找）
+static const char *lookupReal(const char *masked) {
+    if (masked == nullptr) {
+        return nullptr;
+    }
+    std::string m(masked);
+    std::lock_guard<std::mutex> lock(g_hiddenPathMutex);
+    for (const auto &kv : g_hiddenPathMap) {
+        if (kv.second == m) {
+            return kv.first.c_str();
+        }
+    }
+    return nullptr;
+}
+
+// 返回原始路径的子串指针（指向 /data/app/<pkg>/... 段），无需拷贝——
+// dlpi_name 指向 soinfo 内只读内存，整个进程生命周期有效
+static const char *maskModulePath(const char *path) {
+    if (path == nullptr) {
+        return path;
+    }
+    const char *blackbox = strstr(path, "/blackbox/");
+    if (blackbox == nullptr) {
+        return path;
+    }
+    const char *dataApp = strstr(blackbox, "/data/app/");
+    if (dataApp != nullptr) {
+        return dataApp;
+    }
+    return blackbox;
+}
+
+// 伪装 + 登记：含 /blackbox/ 的路径返回伪装形式并登记双向映射
+static const char *maskAndRegister(const char *path) {
+    const char *masked = maskModulePath(path);
+    if (masked != path) {
+        registerHiddenPath(path, masked);
+    }
+    return masked;
+}
+
+static int dlIterateCallback(struct dl_phdr_info *info, size_t size, void *data) {
+    auto *ctx = static_cast<DlIterateContext *>(data);
+    if (ctx->userCallback == nullptr) {
+        return 0;
+    }
+    struct dl_phdr_info masked = *info;
+    if (info->dlpi_name != nullptr) {
+        const char *m = lookupMasked(info->dlpi_name);
+        if (m == nullptr && strstr(info->dlpi_name, "/blackbox/") != nullptr) {
+            m = maskAndRegister(info->dlpi_name);
+        }
+        masked.dlpi_name = (m != nullptr) ? m : info->dlpi_name;
+    }
+    return ctx->userCallback(&masked, size, ctx->userData);
+}
+
+int my_dl_iterate_phdr(int (*callback)(struct dl_phdr_info *, size_t, void *),
+                       void *data) {
+    DlIterateContext ctx{callback, data};
+    return real_dl_iterate_phdr(dlIterateCallback, &ctx);
+}
+
+// ---------------------------------------------------------------------------
+// readlink / readlinkat 路径反查伪装：多开检测遍历 /proc/self/fd/N 拿实际
+// 打开路径（重定向后是黑盒目录）。真实 readlink 拿路径后按 IO 规则反向
+// 替换成应用视角路径（/data/user/0/黑盒/blackbox/... → /data/user/0/包名/...）。
+// readlink 返回不带 \0 的原始字节，先按长度拷进 std::string 再加 \0 处理。
+// ---------------------------------------------------------------------------
+ssize_t (*real_readlink)(const char *, char *, size_t);
+ssize_t (*real_readlinkat)(int, const char *, char *, size_t);
+
+static ssize_t rewriteFdPath(char *buf, ssize_t len, size_t bufsiz) {
+    if (len <= 0 || bufsiz == 0) {
+        return len;
+    }
+    std::string actual(buf, static_cast<size_t>(len));
+    const char *m = lookupMasked(actual.c_str());
+    if (m == nullptr) {
+        if (actual.find("/blackbox/") != std::string::npos) {
+            m = maskAndRegister(actual.c_str());
+        }
+    }
+    if (m == nullptr) {
+        return len;
+    }
+    size_t rl = strlen(m);
+    if (rl > bufsiz) {
+        rl = bufsiz;
+    }
+    memcpy(buf, m, rl);
+    return static_cast<ssize_t>(rl);
+}
+
+ssize_t my_readlink(const char *path, char *buf, size_t bufsiz) {
+    return rewriteFdPath(buf, real_readlink(path, buf, bufsiz), bufsiz);
+}
+
+ssize_t my_readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    return rewriteFdPath(buf, real_readlinkat(dirfd, path, buf, bufsiz), bufsiz);
+}
+
 // redirectPath 命中规则时返回 malloc 的新串，否则原样返回入参
 inline const char *tryRedirect(const char *path) {
     if (path == nullptr) return nullptr;
@@ -110,7 +469,27 @@ int my_open(const char *path, int flags, ...) {
         mode = static_cast<mode_t>(va_arg(ap, int));
         va_end(ap);
     }
+    // 伪装路径反查：readlink / dl_iterate_phdr 伪装过的路径，还原成真实路径
+    // 打开——消除"拿伪装路径 open 失败"的副作用
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        int r = real_open(unmasked, flags, mode);
+        if (r != 0 && errno == EACCES) logDenied("open", path);
+        return r;
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
+    // /proc/*/maps 行伪装：隐藏引擎 so
+    int mapsFd = redirectProcMaps(path, flags, mode);
+    if (mapsFd != 0) {
+        return mapsFd;
+    }
     const char *redir = tryRedirect(path);
+    // 重定向命中：登记"实际路径 ↔ 应用视角路径"，供 readlink 反查伪装
+    if (redir != path && redir != nullptr) {
+        registerHiddenPath(redir, path);
+    }
     int r = real_open(redir, flags, mode);
     if (r != 0 && errno == EACCES) logDenied("open", path);
     releaseRedirect(path, redir);
@@ -128,7 +507,26 @@ int my_openat(int dirfd, const char *path, int flags, ...) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real_openat(dirfd, path, flags, mode);
     }
+    // 伪装路径反查（绝对路径形态）
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        int r = real_openat(dirfd, unmasked, flags, mode);
+        if (r != 0 && errno == EACCES) logDenied("openat", path);
+        return r;
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
+    // /proc/*/maps 行伪装
+    int mapsFd = redirectProcMapsAt(dirfd, path, flags, mode);
+    if (mapsFd != 0) {
+        return mapsFd;
+    }
     const char *redir = tryRedirect(path);
+    // 重定向命中：登记"实际路径 ↔ 应用视角路径"，供 readlink 反查伪装
+    if (redir != path && redir != nullptr) {
+        registerHiddenPath(redir, path);
+    }
     int r = real_openat(dirfd, redir, flags, mode);
     if (r != 0 && errno == EACCES) logDenied("openat", path);
     releaseRedirect(path, redir);
@@ -136,6 +534,14 @@ int my_openat(int dirfd, const char *path, int flags, ...) {
 }
 
 int my___open_2(const char *path, int flags) {
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
+    // /proc/*/maps 行伪装
+    int mapsFd = redirectProcMaps(path, flags, 0);
+    if (mapsFd != 0) {
+        return mapsFd;
+    }
     const char *redir = tryRedirect(path);
     int r = real___open_2(redir, flags);
     if (r != 0 && errno == EACCES) logDenied("__open_2", path);
@@ -147,6 +553,14 @@ int my___openat_2(int dirfd, const char *path, int flags) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real___openat_2(dirfd, path, flags);
     }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
+    // /proc/*/maps 行伪装
+    int mapsFd = redirectProcMapsAt(dirfd, path, flags, 0);
+    if (mapsFd != 0) {
+        return mapsFd;
+    }
     const char *redir = tryRedirect(path);
     int r = real___openat_2(dirfd, redir, flags);
     if (r != 0 && errno == EACCES) logDenied("__openat_2", path);
@@ -155,6 +569,17 @@ int my___openat_2(int dirfd, const char *path, int flags) {
 }
 
 FILE *my_fopen(const char *path, const char *mode) {
+    if (denyIfContainerDataPath(path) != 0) {
+        return nullptr;
+    }
+    if (mode != nullptr && mode[0] == 'r' &&
+        (mode[1] == '\0' || (mode[1] == 'b' && mode[2] == '\0'))) {
+        // /proc/*/maps 行伪装（只处理读模式）
+        int mapsFd = redirectProcMaps(path, O_RDONLY, 0);
+        if (mapsFd != 0) {
+            return mapsFd < 0 ? nullptr : fdopen(mapsFd, mode);
+        }
+    }
     const char *redir = tryRedirect(path);
     FILE *f = real_fopen(redir, mode);
     if (f == nullptr && errno == EACCES) logDenied("fopen", path);
@@ -181,7 +606,74 @@ int my_mkdirat(int dirfd, const char *path, mode_t mode) {
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// 黑盒目录树的"祖先目录"权限伪装：多开检测常沿 dataDir 逐级 access 父目录，
+// 黑盒祖先真实可读（宿主 uid 拥有整棵 blackbox 树），伪装成 EACCES 模拟正常
+// 应用的权限隔离。判据：路径停在 /blackbox/ 后的中间层（其后无 '/'，未落到
+// 具体 data/user/<uid>/<pkg> 或 data/app/<pkg> 层）且是权限检查（非 F_OK）。
+// 还要拦"宿主 data 目录本身"（/data/user/0/<宿主>）——检测方一路剥到最后
+// 一级暴露它（分身体 uid == 宿主 uid，真实可读），这是 GOT 无法覆盖的物理
+// 事实，只能靠显式拦截。
+// ---------------------------------------------------------------------------
+// 宿主 data 目录（/data/user/0/<宿主>），首次遇到含 /blackbox 的路径时提取
+static char g_host_data_dir[128];
+
+static void extractHostDataDir(const char *path) {
+    if (g_host_data_dir[0] != '\0' || path == nullptr) {
+        return;
+    }
+    const char *bb = strstr(path, "/blackbox");
+    if (bb == nullptr || bb == path) {
+        return;
+    }
+    size_t len = static_cast<size_t>(bb - path);
+    if (len >= sizeof(g_host_data_dir)) {
+        len = sizeof(g_host_data_dir) - 1;
+    }
+    memcpy(g_host_data_dir, path, len);
+    g_host_data_dir[len] = '\0';
+}
+
+static bool isBlackboxAncestorDir(const char *path) {
+    if (path == nullptr) {
+        return false;
+    }
+    // 宿主 data 目录本身（/data/user/0/<宿主>）——检测方剥到最深层的主命中点
+    if (g_host_data_dir[0] != '\0' && strcmp(path, g_host_data_dir) == 0) {
+        return true;
+    }
+    const char *blackbox = strstr(path, "/blackbox");
+    if (blackbox == nullptr) {
+        return false;
+    }
+    extractHostDataDir(path);
+    const char *tail = blackbox + strlen("/blackbox");
+    if (*tail == '\0') {
+        return true;   // 路径恰好是 .../blackbox（无尾斜杠）→ 黑盒根 → 拦
+    }
+    if (*tail != '/') {
+        return false;  // 非目录边界（blackbox_xxx）→ 放行
+    }
+    // .../blackbox/xxx：中间层（其后无 '/'）→ 拦；具体数据层 → 放行
+    return strchr(tail + 1, '/') == nullptr;
+}
+
+// 黑盒祖先目录的 access 权限检查一律 EACCES（模拟正常权限隔离）
+static bool denyBlackboxAncestorAccess(const char *path, int mode) {
+    if ((mode & (R_OK | W_OK | X_OK)) == 0) {
+        return false;  // F_OK 存在性检查放行
+    }
+    return isBlackboxAncestorDir(path);
+}
+
 int my_access(const char *path, int mode) {
+    if (denyBlackboxAncestorAccess(path, mode)) {
+        errno = EACCES;
+        return -1;
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
     const char *redir = tryRedirect(path);
     int r = real_access(redir, mode);
     if (r != 0 && errno == EACCES) logDenied("access", path);
@@ -192,6 +684,13 @@ int my_access(const char *path, int mode) {
 int my_faccessat(int dirfd, const char *path, int mode, int flag) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real_faccessat(dirfd, path, mode, flag);
+    }
+    if (denyBlackboxAncestorAccess(path, mode)) {
+        errno = EACCES;
+        return -1;
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
     }
     const char *redir = tryRedirect(path);
     int r = real_faccessat(dirfd, redir, mode, flag);
@@ -204,6 +703,14 @@ int my_fstatat(int dirfd, const char *path, struct stat *buf, int flags) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real_fstatat(dirfd, path, buf, flags);
     }
+    // 伪装路径反查
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        return real_fstatat(dirfd, unmasked, buf, flags);
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
     const char *redir = tryRedirect(path);
     int r = real_fstatat(dirfd, redir, buf, flags);
     if (r != 0 && errno == EACCES) logDenied("fstatat", path);
@@ -214,6 +721,14 @@ int my_fstatat(int dirfd, const char *path, struct stat *buf, int flags) {
 int my_fstatat64(int dirfd, const char *path, struct stat64 *buf, int flags) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real_fstatat64(dirfd, path, buf, flags);
+    }
+    // 伪装路径反查
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        return real_fstatat64(dirfd, unmasked, buf, flags);
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
     }
     const char *redir = tryRedirect(path);
     int r = real_fstatat64(dirfd, redir, buf, flags);
@@ -289,6 +804,13 @@ int my_truncate(const char *path, off_t length) {
 }
 
 DIR *my_opendir(const char *path) {
+    // 伪装路径反查：readlink / dl_iterate_phdr 伪装过的目录路径还原成真实路径
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        DIR *du = real_opendir(unmasked);
+        if (du == nullptr && errno == EACCES) logDenied("opendir", path);
+        return du;
+    }
     const char *redir = tryRedirect(path);
     DIR *d = real_opendir(redir);
     if (d == nullptr && errno == EACCES) logDenied("opendir", path);
@@ -297,6 +819,13 @@ DIR *my_opendir(const char *path) {
 }
 
 int my_stat(const char *path, struct stat *buf) {
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        return real_stat(unmasked, buf);
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
     const char *redir = tryRedirect(path);
     int r = real_stat(redir, buf);
     if (r != 0 && errno == EACCES) logDenied("stat", path);
@@ -305,6 +834,13 @@ int my_stat(const char *path, struct stat *buf) {
 }
 
 int my_lstat(const char *path, struct stat *buf) {
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        return real_lstat(unmasked, buf);
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
     const char *redir = tryRedirect(path);
     int r = real_lstat(redir, buf);
     if (r != 0 && errno == EACCES) logDenied("lstat", path);
@@ -313,6 +849,13 @@ int my_lstat(const char *path, struct stat *buf) {
 }
 
 int my_stat64(const char *path, struct stat64 *buf) {
+    const char *unmasked = lookupReal(path);
+    if (unmasked != nullptr) {
+        return real_stat64(unmasked, buf);
+    }
+    if (denyIfContainerDataPath(path) != 0) {
+        return -1;
+    }
     const char *redir = tryRedirect(path);
     int r = real_stat64(redir, buf);
     if (r != 0 && errno == EACCES) logDenied("stat64", path);
@@ -336,6 +879,10 @@ int my_fstat64(int fd, struct stat64 *buf) {
 int my_faccessat2(int dirfd, const char *path, int mode, int flags) {
     if (dirfd != AT_FDCWD || path == nullptr) {
         return real_faccessat2(dirfd, path, mode, flags);
+    }
+    if (denyBlackboxAncestorAccess(path, mode)) {
+        errno = EACCES;
+        return -1;
     }
     const char *redir = tryRedirect(path);
     int r = real_faccessat2(dirfd, redir, mode, flags);
@@ -414,6 +961,12 @@ HookEntry g_entries[] = {
         {"fstat",            (void *) my_fstat,              (void **) &real_fstat},
         {"fstat64",          (void *) my_fstat64,            (void **) &real_fstat64},
         {"faccessat2",       (void *) my_faccessat2,         (void **) &real_faccessat2},
+        {"access",           (void *) my_access,            (void **) &real_access},
+        {"faccessat",        (void *) my_faccessat,          (void **) &real_faccessat},
+        {"__system_property_get", (void *) my___system_property_get, (void **) &real___system_property_get},
+        {"dl_iterate_phdr",  (void *) my_dl_iterate_phdr,   (void **) &real_dl_iterate_phdr},
+        {"readlink",         (void *) my_readlink,          (void **) &real_readlink},
+        {"readlinkat",       (void *) my_readlinkat,        (void **) &real_readlinkat},
 };
 
 // resolveRemaining: 通过 dlsym 兜底填充仍未解析的 real 指针
@@ -791,6 +1344,32 @@ void doInstallLocked() {
 void NativeIOHook::install() {
     std::lock_guard<std::mutex> lock(g_installMutex);
     doInstallLocked();
+}
+
+void NativeIOHook::addMapsRule(int mode, const char *key, const char *value) {
+    if (key == nullptr || key[0] == '\0') {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_mapsRulesMutex);
+    g_mapsRules.push_back(MapsRule{mode, key, value == nullptr ? "" : value});
+}
+
+void NativeIOHook::clearMapsRules() {
+    std::lock_guard<std::mutex> lock(g_mapsRulesMutex);
+    g_mapsRules.clear();
+}
+
+void NativeIOHook::addPropRule(const char *key, const char *value) {
+    if (key == nullptr || key[0] == '\0' || value == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_propRulesMutex);
+    g_propRules.push_back(PropRule{key, value});
+}
+
+void NativeIOHook::clearPropRules() {
+    std::lock_guard<std::mutex> lock(g_propRulesMutex);
+    g_propRules.clear();
 }
 
 bool NativeIOHook::addNamedHook(const void *func, void *replace, void **backup) {

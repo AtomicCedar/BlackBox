@@ -103,11 +103,13 @@ public final class SharedUserSetting implements Parcelable {
     public void readFromParcel(Parcel source) {
         this.name = source.readString();
         this.userId = source.readInt();
+        this.seInfoTargetSdkVersion = source.readInt();
     }
 
     protected SharedUserSetting(Parcel in) {
         this.name = in.readString();
         this.userId = in.readInt();
+        this.seInfoTargetSdkVersion = in.readInt();
     }
 
     public static final Parcelable.Creator<SharedUserSetting> CREATOR = new Parcelable.Creator<SharedUserSetting>() {

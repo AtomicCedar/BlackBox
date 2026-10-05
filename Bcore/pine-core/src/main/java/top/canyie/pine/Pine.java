@@ -28,10 +28,11 @@ public final class Pine {
     public static final Object[] EMPTY_OBJECT_ARRAY = new Object[0];
     private static final int ARCH_ARM = 1;
     private static final int ARCH_ARM64 = 2;
-    private static final int ARCH_X86 = 3;
     private static volatile boolean initialized;
     private static final Map<String, Method> sBridgeMethods = new HashMap<>(8, 2f);
     private static final Map<Long, HookRecord> sHookRecords = new ConcurrentHashMap<>();
+    private static final ThreadLocal<HookRecord> sCurrentHookRecord = new ThreadLocal<>();
+    private static final ThreadLocal<Set<HookRecord>> sWarnedReentryRecords = new ThreadLocal<>();
     private static final Object sHookLock = new Object();
     private static int arch;
     private static volatile int hookMode;
@@ -53,6 +54,18 @@ public final class Pine {
 
         @Override public void handleUnhook(HookRecord hookRecord, MethodHook hook) {
             hookRecord.removeCallback(hook);
+            // 最后一个 callback 移除且方法可安全恢复(replacement 模式)时:
+            // 恢复方法原始代码入口,不再经过 trampoline,并从记录表移除释放 Java 侧持有。
+            // inline 模式或 hookReplace 路径(originEntry 未知)保持原语义:方法继续走 bridge,
+            // 空 callback 时直接调用原方法(handleCall 的 emptyCallbacks 分支),功能不受影响。
+            if (hookRecord.emptyCallbacks() && !hookRecord.isInlineHook && hookRecord.originEntry != 0) {
+                synchronized (sHookLock) {
+                    if (hookRecord.emptyCallbacks()) {
+                        restoreMethod0(hookRecord.artMethod, hookRecord.originEntry);
+                        sHookRecords.remove(hookRecord.artMethod);
+                    }
+                }
+            }
         }
     };
 
@@ -68,7 +81,8 @@ public final class Pine {
 
     /**
      * Initialize the Pine library if not initialized.
-     * WARNING: Calling this API will disable hidden api policy when
+     * NOTE: Since the hidden api patch (libart.so .text modification) is disabled by default,
+     * initialization no longer modifies any system code unless you explicitly set
      * {@code PineConfig.disableHiddenApiPolicy} or {@code PineConfig.disableHiddenApiPolicyForPlatformDomain}.
      * Due to an ART bug, if a thread changes hidden api policy while another thread is calling
      * a API that lists members of a class, a out-of-bounds write may occur and causes crashes.
@@ -106,14 +120,43 @@ public final class Pine {
             LibLoader libLoader = PineConfig.libLoader;
             if (libLoader != null) libLoader.loadLib();
 
-            init0(sdkLevel, PineConfig.debug, PineConfig.debuggable, PineConfig.antiChecks,
-                    PineConfig.disableHiddenApiPolicy, PineConfig.disableHiddenApiPolicyForPlatformDomain);
+            // Global hidden API exemption via the official data interface
+            // (VMRuntime.setHiddenApiExemptions(), implemented by HiddenApiBypass).
+            // This only writes runtime data and does NOT modify libart.so's .text section
+            // (the old native .text patching has been removed).
+            if (sdkLevel >= Build.VERSION_CODES.P
+                    && (PineConfig.disableHiddenApiPolicy
+                        || PineConfig.disableHiddenApiPolicyForPlatformDomain)) {
+                boolean applied = applyHiddenApiExemptions();
+                if (!applied) {
+                    Log.e(TAG, "Failed to apply hidden api exemptions via HiddenApiBypass. "
+                            + "Hidden APIs will remain restricted.");
+                }
+            }
+
+            init0(sdkLevel, PineConfig.debug, PineConfig.debuggable, PineConfig.antiChecks);
             initBridgeMethods();
 
             if (PineConfig.useFastNative && sdkLevel >= Build.VERSION_CODES.LOLLIPOP)
                 enableFastNative();
         } catch (Exception e) {
             throw new RuntimeException("Pine init error", e);
+        }
+    }
+
+    /**
+     * Apply a process-wide hidden API exemption (all prefixes) using the official
+     * {@code VMRuntime.setHiddenApiExemptions} data interface. Can only take effect once;
+     * repeated calls are no-ops on Android 13+.
+     *
+     * @return {@code true} if the exemption was applied successfully
+     */
+    private static boolean applyHiddenApiExemptions() {
+        try {
+            return top.canyie.pine.utils.HiddenApiBypass.setHiddenApiExemptions("");
+        } catch (Throwable t) {
+            Log.e(TAG, "HiddenApiBypass unavailable", t);
+            return false;
         }
     }
 
@@ -128,9 +171,6 @@ public final class Pine {
                         long.class, long.class, long.class, long.class};
             } else if (arch == ARCH_ARM) {
                 entryClassName = "top.canyie.pine.entry.Arm32Entry";
-                paramTypes = new Class<?>[] {int.class, int.class, int.class};
-            } else if (arch == ARCH_X86) {
-                entryClassName = "top.canyie.pine.entry.X86Entry";
                 paramTypes = new Class<?>[] {int.class, int.class, int.class};
             } else throw new RuntimeException("Unexpected arch " + arch);
 
@@ -378,6 +418,11 @@ public final class Pine {
 
         backup.setAccessible(true);
         hookRecord.backup = backup;
+        hookRecord.isInlineHook = isInlineHook;
+        if (!isInlineHook) {
+            // replacement 模式:从 trampoline 读出原始代码入口,供 unhook 时恢复
+            hookRecord.originEntry = getOriginEntry(hookRecord.trampoline);
+        }
     }
 
     public static Method hookReplace(HookRecord hookRecord, Method replacement, Method backup,
@@ -494,15 +539,20 @@ public final class Pine {
         // native entry of JNI method may be changed by RegisterNatives and UnregisterNatives,
         // so we need to update them when invoke backup method.
         Member origin = hookRecord.target;
+        if (origin == null) {
+            Log.w(TAG, "Target method is null!!!");
+            return null;
+        }        
         Method backup = hookRecord.backup;
-        Class<?> declaring = origin.getDeclaringClass();
-        syncMethodInfo(origin, backup, hookRecord.skipUpdateDeclaringClass);
-        // FIXME: GC happens here (you can add Runtime.getRuntime().gc() to test) will crash backup calling
-        Object result = backup.invoke(thisObject, args);
-        // Explicit use declaring_class object to ensure it has reference on stack
-        // and avoid being moved by gc. (invalid for now)
-        declaring.getClass();
-        return result;
+        if (backup == null) {
+            Log.w(TAG, "Backup method is null for " + hookRecord.target);
+            return null;
+        }        
+        // 修复:走 native 临界区路径。native 在 GC critical section 内同步 declaring class 并调用 backup,
+        // 消除 "同步" 与 "调用" 之间的 TOCTOU 窗口(GC compact 移动 Class 导致 backup 内 GcRoot 悬空)。
+        // Android 11+ 且符号可用时走临界区路径;否则 native 内部退化为普通反射调用,行为与旧路径一致。
+        // (旧版此处的 declaring.getClass() 是无效 GC barrier——栈引用不阻止 compact 移动,已随修复移除)
+        return invokeBackupMethod0(origin, backup, thisObject, args);
     }
 
     /**
@@ -693,23 +743,59 @@ public final class Pine {
 
     /**
      * Disable the hidden api restriction policy in the current process.
+     * <p>
+     * This is implemented with the official data interface
+     * {@code VMRuntime.setHiddenApiExemptions()} (via
+     * {@code top.canyie.pine.utils.HiddenApiBypass}), which only writes runtime data
+     * and does NOT modify libart.so's .text section. The exemption can only be applied once;
+     * passing {@code false, false} afterwards cannot revoke it (ART caches access flags).
+     * <p>
+     * Alternatively (and as a fallback when the exemption cannot be applied), look up hidden
+     * members on demand with {@link top.canyie.pine.utils.HiddenApiCompat} /
+     * {@link top.canyie.pine.utils.PinePass} (pure Java, Property route).
      * @param application whether the restriction policy for application domain should be disabled
      * @param platform whether the restriction policy for platform domain should be disabled
      * @see PineConfig#disableHiddenApiPolicy
      * @see PineConfig#disableHiddenApiPolicyForPlatformDomain
      */
     public static void disableHiddenApiPolicy(boolean application, boolean platform) {
-        if (initialized) {
-            disableHiddenApiPolicy0(application, platform);
-        } else {
+        if (!initialized) {
             PineConfig.disableHiddenApiPolicy = application;
             PineConfig.disableHiddenApiPolicyForPlatformDomain = platform;
             ensureInitialized();
+            return;
+        }
+        if (application || platform) {
+            if (!applyHiddenApiExemptions()) {
+                Log.e(TAG, "Failed to apply hidden api exemptions");
+            }
+        } else {
+            Log.w(TAG, "disableHiddenApiPolicy(false, false) cannot revoke an already applied "
+                    + "exemption: ART caches access flags.");
         }
     }
 
     public static Object handleCall(HookRecord hookRecord, Object thisObject, Object[] args)
             throws Throwable {
+        // Reentrancy guard (log-only, never changes behavior): warn once per thread+method when the
+        // same hooked method re-enters handleCall on the same thread, e.g. a beforeCall/afterCall
+        // calling back into the hooked method (infinite recursion). Legitimate nesting of different
+        // methods and recursion of the original method only warn on the first occurrence.
+        HookRecord outerHookRecord = sCurrentHookRecord.get();
+        if (outerHookRecord == hookRecord) {
+            Set<HookRecord> warned = sWarnedReentryRecords.get();
+            if (warned == null) {
+                warned = new HashSet<>();
+                sWarnedReentryRecords.set(warned);
+            }
+            if (warned.add(hookRecord)) {
+                Log.w(TAG, "Reentrant call of the same hooked method detected: " + hookRecord.target
+                        + " on the same thread. If it repeats infinitely, do not call the hooked "
+                        + "method from inside its own beforeCall/afterCall.");
+            }
+        }
+        sCurrentHookRecord.set(hookRecord);
+        try {
         // WARNING: DO NOT print thisObject or args, else the toString() method will be called on it
         // At this time the object may not "ready"
         if (PineConfig.debug)
@@ -780,6 +866,9 @@ public final class Pine {
             throw callFrame.getThrowable();
         else
             return callFrame.getResult();
+        } finally {
+            sCurrentHookRecord.set(outerHookRecord);
+        }
     }
 
     /**
@@ -805,10 +894,13 @@ public final class Pine {
     }
 
     private static native void init0(int androidVersion, boolean debug, boolean debuggable,
-                                     boolean antiChecks, boolean disableHiddenApiPolicy,
-                                     boolean disableHiddenApiPolicyForPlatformDomain);
+                                     boolean antiChecks);
 
     private static native void enableFastNative();
+
+    private static native long getOriginEntry(long trampoline);
+
+    private static native void restoreMethod0(long artMethod, long originEntry);
 
     public static native long getArtMethod(Member method);
 
@@ -838,15 +930,13 @@ public final class Pine {
 
     public static native void getArgsArm64(long extras, long sp, boolean[] typeWides, long[] crOut, long[] stack, double[] fpOut);
 
-    public static native void getArgsX86(int extras, int[] out, int ebx);
-
+    /** @deprecated callBackupMethod 已改走 invokeBackupMethod0,本方法不再被调用(仅保留 JNI 注册)。 */
     private static native void syncMethodInfo(Member origin, Method backup, boolean skipDeclaringClass);
+    private static native Object invokeBackupMethod0(Member origin, Method backup, Object thisObject, Object[] args);
 
     public static native long currentArtThread0();
 
     private static native void setDebuggable0(boolean debuggable);
-
-    private static native void disableHiddenApiPolicy0(boolean application, boolean platform);
 
     private static native void makeClassesVisiblyInitialized(long thread);
 
@@ -932,6 +1022,8 @@ public final class Pine {
         public Method bridge;
         public Method backup;
         public long trampoline;
+        public boolean isInlineHook;
+        public long originEntry;
         public boolean isStatic;
         public int paramNumber;
         public Class<?>[] paramTypes;

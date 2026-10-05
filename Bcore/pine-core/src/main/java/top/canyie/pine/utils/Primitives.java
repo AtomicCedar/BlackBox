@@ -35,7 +35,7 @@ import top.canyie.pine.Pine;
         if (!triedGetShadowKlassField) {
             triedGetShadowKlassField = true;
             try {
-                shadowKlassField = Object.class.getDeclaredField("shadow$_klass_");
+                shadowKlassField = HiddenApiCompat.findDeclaredField(Object.class, "shadow$_klass_");
                 shadowKlassField.setAccessible(true);
             } catch (NoSuchFieldException e) {
                 Log.w(TAG, "Object.shadow$_klass_ not found, use Unsafe.", e);
@@ -47,7 +47,7 @@ import top.canyie.pine.Pine;
             } else {
                 ensureUnsafeReady();
                 if (putObject == null) {
-                    putObject = unsafeClass.getDeclaredMethod("putObject", Object.class, long.class, Object.class);
+                    putObject = HiddenApiCompat.findDeclaredMethod(unsafeClass, "putObject", Object.class, long.class, Object.class);
                     putObject.setAccessible(true);
                 }
                 putObject.invoke(unsafe, target, 0L, newClass); // offset 0 is first field
@@ -62,7 +62,7 @@ import top.canyie.pine.Pine;
         if (superClassField == null) {
             try {
                 // noinspection SoonBlockedPrivateApi
-                superClassField = Class.class.getDeclaredField("superClass");
+                superClassField = HiddenApiCompat.findDeclaredField(Class.class, "superClass");
                 superClassField.setAccessible(true);
             } catch (NoSuchFieldException e) {
                 throw new RuntimeException("Class.superClass not found", e);
@@ -79,7 +79,7 @@ import top.canyie.pine.Pine;
         // 1. try Android-specific field
         try {
             // noinspection SoonBlockedPrivateApi
-            Field offset = Field.class.getDeclaredField("offset");
+            Field offset = HiddenApiCompat.findDeclaredField(Field.class, "offset");
             offset.setAccessible(true);
             return offset.getInt(field);
         } catch (Exception ignored) {
@@ -88,7 +88,7 @@ import top.canyie.pine.Pine;
         // 2. try Android-specific method
         try {
             // noinspection DiscouragedPrivateApi
-            Method getOffset = Field.class.getDeclaredMethod("getOffset");
+            Method getOffset = HiddenApiCompat.findDeclaredMethod(Field.class, "getOffset");
             getOffset.setAccessible(true);
             return (int) getOffset.invoke(field);
         } catch (Exception ignored) {
@@ -97,7 +97,7 @@ import top.canyie.pine.Pine;
         // 3. try Java traditional method
         // We assume that the field is non-static.
         ensureUnsafeReady();
-        Method objectFieldOffset = unsafeClass.getDeclaredMethod("objectFieldOffset", Field.class);
+        Method objectFieldOffset = HiddenApiCompat.findDeclaredMethod(unsafeClass, "objectFieldOffset", Field.class);
         objectFieldOffset.setAccessible(true);
         return (int) objectFieldOffset.invoke(unsafe, field);
     }
@@ -107,7 +107,7 @@ import top.canyie.pine.Pine;
         if (classAccessFlagsField == null) {
             try {
                 // noinspection JavaReflectionMemberAccess
-                classAccessFlagsField = Class.class.getDeclaredField("accessFlags");
+                classAccessFlagsField = HiddenApiCompat.findDeclaredField(Class.class, "accessFlags");
                 classAccessFlagsField.setAccessible(true);
             } catch (NoSuchFieldException e) {
                 throw new RuntimeException("Class.accessFlags not found", e);
@@ -129,11 +129,11 @@ import top.canyie.pine.Pine;
             Object[] array = new Object[] { o };
             try {
                 if (baseOffsetOfObjectArray == 0) {
-                    Method arrayBaseOffset = unsafeClass.getDeclaredMethod("arrayBaseOffset", Class.class);
+                    Method arrayBaseOffset = HiddenApiCompat.findDeclaredMethod(unsafeClass, "arrayBaseOffset", Class.class);
                     arrayBaseOffset.setAccessible(true);
                     baseOffsetOfObjectArray = (int) arrayBaseOffset.invoke(unsafe, Object[].class);
 
-                    getInt = unsafeClass.getDeclaredMethod("getInt", Object.class, long.class);
+                    getInt = HiddenApiCompat.findDeclaredMethod(unsafeClass, "getInt", Object.class, long.class);
                     getInt.setAccessible(true);
                 }
                 // ART allocates objects in the low 4GB memory region
@@ -187,7 +187,7 @@ import top.canyie.pine.Pine;
     private static Object getUnsafe() throws Exception {
         try {
             // try Unsafe.getUnsafe()
-            Method getUnsafe = unsafeClass.getDeclaredMethod("getUnsafe");
+            Method getUnsafe = HiddenApiCompat.findDeclaredMethod(unsafeClass, "getUnsafe");
             getUnsafe.setAccessible(true);
             return getUnsafe.invoke(null);
         } catch (Exception ignored) {
@@ -196,10 +196,10 @@ import top.canyie.pine.Pine;
         Field theUnsafe;
         try {
             // try Unsafe.theUnsafe (art and hotspot vm)
-            theUnsafe = unsafeClass.getDeclaredField("theUnsafe");
+            theUnsafe = HiddenApiCompat.findDeclaredField(unsafeClass, "theUnsafe");
         } catch (NoSuchFieldException ignored) {
             // try Unsafe.THE_ONE (art and dalvik vm)
-            theUnsafe = unsafeClass.getDeclaredField("THE_ONE");
+            theUnsafe = HiddenApiCompat.findDeclaredField(unsafeClass, "THE_ONE");
         }
         theUnsafe.setAccessible(true);
         return theUnsafe.get(null);

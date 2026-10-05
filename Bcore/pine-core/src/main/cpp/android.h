@@ -29,11 +29,7 @@ namespace pine {
             return sizeof(void*) == 8;
         }
 
-        static void Init(JNIEnv* env, int sdk_version, bool disable_hiddenapi_policy, bool disable_hiddenapi_policy_for_platform);
-        static void DisableHiddenApiPolicy(bool application, bool platform) {
-            ElfImage handle("libart.so");
-            DisableHiddenApiPolicy(&handle, application, platform);
-        }
+        static void Init(JNIEnv* env, int sdk_version);
         static bool DisableProfileSaver();
         static void SetClassLinker(void* class_linker) {
             class_linker_ = class_linker;
@@ -74,6 +70,11 @@ namespace pine {
             }
         }
 
+        // 返回 GC critical section 符号是否可用(Android 11+ 且 libart 符号解析成功)
+        static bool HasGCCriticalSection() {
+            return start_gc_critical_section != nullptr && end_gc_critical_section != nullptr;
+        }
+
         static void SuspendVM(void* cookie, void* self, const char* cause) {
             if (suspend_vm) {
                 suspend_vm();
@@ -109,7 +110,6 @@ namespace pine {
         static constexpr int kU = 34;
         static constexpr int kV = 35;
     private:
-        static void DisableHiddenApiPolicy(const ElfImage* handle, bool application, bool platform);
         static void InitMembersFromRuntime(JavaVM* jvm, const ElfImage* handle);
         static void InitClassLinker(void* runtime, size_t java_vm_offset, const ElfImage* handle, bool has_small_irt);
         static void InitJitCodeCache(void* runtime, size_t java_vm_offset, const ElfImage* handle);
@@ -120,6 +120,11 @@ namespace pine {
             // Since APEX module can be upgraded through Google Play update without the need to
             // update Android major version, hardcode offset will be meaningless on old Android
             // major versions with new ART. We list all offsets we known.
+            // NOTE (API 36/37, verified against AOSP android15/16/17/main runtime/runtime.h):
+            // the member sequence before java_vm_ is unchanged, so 632 is expected to still hold;
+            // even if it shifts, InitMembersFromRuntime falls back to a linear search (FindOffset),
+            // so this table only affects performance, not correctness. Add a new entry here only
+            // if a real-device LOGW reports a different measured offset.
             if (LIKELY(has_small_irt)) {
                 offsets.emplace_back(Is64Bit() ? 632 : 356); // ART 14, 15
                 if (version < kU)

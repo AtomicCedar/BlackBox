@@ -1,42 +1,36 @@
 ---
-name: Bug report / Bug 反馈
-about: Create a report to help us improve
+name: Bug 反馈
+about: 提交 Bug 帮助我们改进
 title: "[BUG] "
 labels: bug
 assignees: FBlackBox
 
 ---
 
-**Describe the bug** / **描述一下这个错误**
-A clear and concise description of what the bug is.
+**描述一下这个错误**
 清晰而简明地描述什么是错误。
 
-**To Reproduce** / **复现步骤**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+**复现步骤**
+复现步骤：
+1. 进入 '...'
+2. 点击 '....'
+3. 滚动到 '....'
+4. 查看错误
 
-**Expected behavior** / **预期的行为**
-A clear and concise description of what you expected to happen.
+**预期的行为**
 清晰而简明地描述你所期望发生的事情。
 
-**Screenshots** / **截图**
-If applicable, add screenshots to help explain your problem.
+**截图**
 如果有，请添加屏幕截图以帮助解释你的问题。
 
-**Mobile Phone Info** / **手机信息**
+**手机信息**
 Xiaomi / Android12
 
-**Logcat** / **日志**
-If you are a developer or capable please provide logs for us to analyze.
+**日志**
 如果你是开发者或者有能力的请提供日志供我们分析。
 
-**Additional context** / **额外内容**
-Add any other context about the problem here.
+**额外内容**
 在此添加关于该问题的任何其他内容。
 
 **APK**
-If applicable, add the apk file for me to test.
 如果有，请添加APK文件给我测试。

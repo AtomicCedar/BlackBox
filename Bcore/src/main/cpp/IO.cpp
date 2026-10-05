@@ -19,7 +19,9 @@ char *replace(const char *str, const char *src, const char *dst) {
 
     size_t result_len = strlen(str) + (strlen(dst) - strlen(src)) * count + 1;
     char *result = (char *) malloc(result_len);
-    memset(result, 0, strlen(result));
+    // 必须清零整个缓冲区：strncat/strcat 是追加式写入，未初始化内存读 strlen 是 UB；
+    // 用 result_len（而非 strlen(result)）清，避免读未初始化内存
+    memset(result, 0, result_len);
 
     const char *left = str;
     const char *right = nullptr;

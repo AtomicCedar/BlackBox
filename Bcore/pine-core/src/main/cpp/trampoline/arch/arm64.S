@@ -6,6 +6,7 @@ name:
 
 #define VAR(name) \
 .global name; \
+.hidden name; \
 name:\
 name##_addr:
 

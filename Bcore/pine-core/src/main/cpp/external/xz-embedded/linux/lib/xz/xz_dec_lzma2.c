@@ -189,7 +189,7 @@ struct lzma_dec {
 	uint16_t dist_slot[DIST_STATES][DIST_SLOTS];
 
 	/*
-	 * Probability trees for additional bits for match distance
+	 * Probility trees for additional bits for match distance
 	 * when the distance is in the range [4, 127].
 	 */
 	uint16_t dist_special[FULL_DISTANCES - DIST_MODEL_END];
@@ -1211,8 +1211,8 @@ struct xz_dec_microlzma {
 	struct xz_dec_lzma2 s;
 };
 
-XZ_EXTERN enum xz_ret xz_dec_microlzma_run(struct xz_dec_microlzma *s_ptr,
-					   struct xz_buf *b)
+enum xz_ret xz_dec_microlzma_run(struct xz_dec_microlzma *s_ptr,
+				 struct xz_buf *b)
 {
 	struct xz_dec_lzma2 *s = &s_ptr->s;
 
@@ -1289,8 +1289,8 @@ XZ_EXTERN enum xz_ret xz_dec_microlzma_run(struct xz_dec_microlzma *s_ptr,
 	}
 }
 
-XZ_EXTERN struct xz_dec_microlzma *xz_dec_microlzma_alloc(enum xz_mode mode,
-							  uint32_t dict_size)
+struct xz_dec_microlzma *xz_dec_microlzma_alloc(enum xz_mode mode,
+						uint32_t dict_size)
 {
 	struct xz_dec_microlzma *s;
 
@@ -1318,10 +1318,8 @@ XZ_EXTERN struct xz_dec_microlzma *xz_dec_microlzma_alloc(enum xz_mode mode,
 	return s;
 }
 
-XZ_EXTERN void xz_dec_microlzma_reset(struct xz_dec_microlzma *s,
-				      uint32_t comp_size,
-				      uint32_t uncomp_size,
-				      int uncomp_size_is_exact)
+void xz_dec_microlzma_reset(struct xz_dec_microlzma *s, uint32_t comp_size,
+			    uint32_t uncomp_size, int uncomp_size_is_exact)
 {
 	/*
 	 * comp_size is validated in xz_dec_microlzma_run().
@@ -1335,7 +1333,7 @@ XZ_EXTERN void xz_dec_microlzma_reset(struct xz_dec_microlzma *s,
 	s->s.temp.size = 0;
 }
 
-XZ_EXTERN void xz_dec_microlzma_end(struct xz_dec_microlzma *s)
+void xz_dec_microlzma_end(struct xz_dec_microlzma *s)
 {
 	if (DEC_IS_MULTI(s->s.dict.mode))
 		vfree(s->s.dict.buf);

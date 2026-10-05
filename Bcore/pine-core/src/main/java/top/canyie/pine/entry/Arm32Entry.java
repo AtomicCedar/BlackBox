@@ -25,7 +25,7 @@ public final class Arm32Entry {
     // only one core register (r3) is available, the register won't be used and art directly
     // pushes all parts of the argument onto stack. I've forgot whether I checked oatdump from
     // old versions or not, but related tests don't fail. To avoid regressions, let's check it :)
-    private static final boolean DISALLOW_LONG_CROSS_CR_AND_STACK = PineConfig.sdkLevel >= 31 /* VERSION_CODES.S, compileSdk=30 */;
+    private static final boolean DISALLOW_LONG_CROSS_CR_AND_STACK = PineConfig.sdkLevel >= Build.VERSION_CODES.S;
 
     private Arm32Entry() {
     }

@@ -3,11 +3,15 @@ plugins {
 }
 
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
-    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion "36.1.0"
+    namespace 'top.niunaijun.android_mirror'
 
-    aidlPackageWhiteList "android/app/IServiceConnection.aidl"
-    aidlPackageWhiteList "android/accounts/IAccountManagerResponse.aidl"
+    aidlPackagedList = ["android/app/IServiceConnection.aidl", "android/accounts/IAccountManagerResponse.aidl"]
+
+    buildFeatures {
+        aidl true
+    }
 
     defaultConfig {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

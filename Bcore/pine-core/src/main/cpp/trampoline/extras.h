@@ -57,10 +57,6 @@ namespace pine {
         // Floating point registers, s0~s15 = d0~d7
         jfloat fps[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 #endif
-#elif defined(__i386__)
-        void* ecx = nullptr;
-        void* edx = nullptr;
-        void* esp = nullptr;
 #else
 #error unsupported architecture
 #endif

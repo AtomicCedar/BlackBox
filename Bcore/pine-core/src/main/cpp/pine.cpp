@@ -3,6 +3,7 @@
 //
 
 #include <cassert>
+#include <mutex>
 #include "pine_config.h"
 #include "jni_bridge.h"
 #include "android.h"
@@ -20,14 +21,11 @@ using namespace pine;
 
 static constexpr jint kArchArm = 1;
 static constexpr jint kArchArm64 = 2;
-static constexpr jint kArchX86 = 3;
 static constexpr jint kCurrentArch =
 #ifdef __aarch64__
         kArchArm64
 #elif defined(__arm__)
         kArchArm
-#elif defined(__i386__)
-        kArchX86
 #endif
         ;
 
@@ -77,29 +75,14 @@ void SyncMethodEntry(void* target, void* backup, void* entry) {
     t->SetEntryPointFromCompiledCode(entry);
 }
 
-EXPORT_C bool PineNativeInlineHookSymbolNoBackup(const char* elf, const char* symbol, void* replace) {
-    ElfImage handle(elf);
-    void* addr = handle.GetSymbolAddress(symbol);
-    if (UNLIKELY(!addr)) return false;
-    return TrampolineInstaller::GetOrInitDefault()->NativeHookNoBackup(addr, replace);
-}
-
-EXPORT_C void PineNativeInlineHookFuncNoBackup(void* target, void* replace) {
-    TrampolineInstaller::GetOrInitDefault()->NativeHookNoBackup(target, replace);
-}
-
-EXPORT_C void PineFillWithNop(void* target, size_t size) {
-    TrampolineInstaller::GetOrInitDefault()->FillWithNop(target, size);
-}
-
 void Pine_init0(JNIEnv* env, jclass Pine, jint androidVersion, jboolean debug, jboolean debuggable,
-        jboolean antiChecks, jboolean disableHiddenApiPolicy, jboolean disableHiddenApiPolicyForPlatformDomain) {
+        jboolean antiChecks) {
     if (debug == JNI_TRUE) LOGI("Pine native init...");
     PineConfig::debug = static_cast<bool>(debug);
     PineConfig::debuggable = static_cast<bool>(debuggable);
     PineConfig::anti_checks = static_cast<bool>(antiChecks);
     TrampolineInstaller::GetOrInitDefault(); // trigger TrampolineInstaller::default_ initialization
-    Android::Init(env, androidVersion, disableHiddenApiPolicy, disableHiddenApiPolicyForPlatformDomain);
+    Android::Init(env, androidVersion);
     {
         ScopedLocalClassRef Ruler(env, "top/canyie/pine/Ruler");
         auto m1 = art::ArtMethod::Require(env, Ruler.Get(), "m1", "(F)V", true);
@@ -467,44 +450,18 @@ void Pine_getArgsArm32(JNIEnv *env, jclass, jint javaExtras, jint sp,
     }
     delete extras;
 }
-#elif defined(__i386__)
-void Pine_getArgsX86(JNIEnv* env, jclass, jint javaExtras, jintArray javaArray, jint ebx) {
-    auto extras = reinterpret_cast<Extras*>(javaExtras);
-    jint length = env->GetArrayLength(javaArray);
-    if (LIKELY(length > 0)) {
-        jint* array = static_cast<jint*>(env->GetPrimitiveArrayCritical(javaArray, nullptr));
-        if (UNLIKELY(!array)) {
-            constexpr const char *error_msg = "GetPrimitiveArrayCritical returned nullptr! javaArray is invalid?";
-            LOGF(error_msg);
-            env->FatalError(error_msg);
-            abort(); // Unreachable
-        }
-
-        do {
-            array[0] = reinterpret_cast<jint>(extras->ecx);
-            if (length == 1) break;
-            array[1] = reinterpret_cast<jint>(extras->edx);
-            if (length == 2) break;
-            if (length == 3) {
-                // sizeof(args) == 12: use ecx, edx and ebx.
-                array[2] = ebx;
-                break;
-            }
-            uintptr_t esp = reinterpret_cast<uintptr_t>(extras->esp) + 4/*edi*/ + 4 /*return address*/;
-
-            // get args from stack
-            for (int i = 2; i < length; i++) {
-                array[i] = *reinterpret_cast<jint*> (esp + 4 /*callee*/ + 4 * i);
-            }
-        } while (false);
-
-        env->ReleasePrimitiveArrayCritical(javaArray, array, JNI_ABORT);
-    }
-//  extras->ReleaseLock();
-}
 #endif
 
+/**
+ * 同步 backup 的 declaring class / JNI entry(旧调用路径)。
+ * 已弃用:callBackupMethod 现走 Pine_invokeBackupMethod0(GC critical section 内同步+调用),
+ * 本方法不再被 Java 侧调用,仅保留注册以免破坏外部 JNI 绑定。
+ */
 void Pine_syncMethodInfo(JNIEnv* env, jclass, jobject javaOrigin, jobject javaBackup, jboolean skipDeclaringClass) {
+    if (javaOrigin == nullptr || javaBackup == nullptr) {
+        LOGW("syncMethodInfo: javaOrigin or javaBackup is null");
+        return;
+    }
     auto origin = art::ArtMethod::FromReflectedMethod(env, javaOrigin);
     auto backup = art::ArtMethod::FromReflectedMethod(env, javaBackup);
 
@@ -530,12 +487,113 @@ void Pine_syncMethodInfo(JNIEnv* env, jclass, jobject javaOrigin, jobject javaBa
     }
 }
 
-void Pine_setDebuggable(JNIEnv*, jclass, jboolean debuggable) {
-    PineConfig::debuggable = static_cast<bool>(debuggable);
+namespace {
+    // java.lang.reflect.Method.invoke 的 jmethodID 缓存(首次使用时懒加载)
+    jmethodID g_method_invoke_id = nullptr;
+    std::once_flag g_method_invoke_once;
+
+    void InitMethodInvokeId(JNIEnv* env) {
+        jclass method_class = env->FindClass("java/lang/reflect/Method");
+        if (UNLIKELY(!method_class || env->ExceptionCheck())) {
+            env->ExceptionClear();
+            return;
+        }
+        g_method_invoke_id = env->GetMethodID(method_class, "invoke",
+                "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+        env->DeleteLocalRef(method_class);
+        if (UNLIKELY(!g_method_invoke_id || env->ExceptionCheck())) {
+            env->ExceptionClear();
+        }
+    }
+
+    // 同步 backup 的 declaring class / JNI entry。纯 native 内存读写,不分配、不触发 GC,
+    // 可以在 GC critical section 内执行。
+    void SyncBackupMeta(JNIEnv* env, art::ArtMethod* origin, art::ArtMethod* backup) {
+        if (Android::version >= Android::kM) {
+            uint32_t declaring_class = origin->GetDeclaringClass();
+            if (declaring_class != backup->GetDeclaringClass()) {
+                LOGI("GC moved declaring class of method %p, also update in backup %p", origin, backup);
+                backup->SetDeclaringClass(declaring_class);
+            }
+        }
+        // JNI entry 同步(与 Pine_syncMethodInfo 一致)
+        if (backup->IsNative()) {
+            void* previous = backup->GetEntryPointFromJni();
+            void* current = origin->GetEntryPointFromJni();
+            if (current != previous) {
+                backup->SetEntryPointFromJni(current);
+            }
+        }
+    }
+
+    // 反射调用 backup 原方法。必须在 GC critical section 之外执行:
+    // 临界区内执行 Java 方法体会分配对象,分配需要等待 GC 完成,而 GC 又等待本线程退出临界区,
+    // 两者互锁导致每次调用卡数百毫秒,UI 线程累积成 ANR(Android 15/16/MIUI 实测)。
+    jobject InvokeBackupReflection(JNIEnv* env, jobject javaBackup, jobject thisObject, jobjectArray javaArgs) {
+        return env->CallObjectMethod(javaBackup, g_method_invoke_id, thisObject, javaArgs);
+    }
 }
 
-void Pine_disableHiddenApiPolicy0(JNIEnv*, jclass, jboolean application, jboolean platform) {
-    Android::DisableHiddenApiPolicy(application, platform);
+/**
+ * 在 GC critical section 内同步 declaring class,临界区外调用 backup 方法(原方法)。
+ *
+ * 背景:backup ArtMethod 是 malloc 分配、不在 ART 受管方法表中,其 declaring_class 等 GcRoot
+ * 字段只是 hook 时的快照。反射慢路径(reflection.cc InvokeMethod)以及 JIT/AOT 编译代码在
+ * 调用/执行期间都会消费这些快照;GC compact 移动 Class 对象后快照失效,backup.invoke() 即崩溃
+ * (Pine.java callBackupMethod 的 FIXME)。scoped gc critical section 会阻止 GC 移动对象,
+ * 因此同步操作放入临界区后,消费时引用的 declaring class 是新鲜的。
+ *
+ * 注意:backup 的 Java 反射调用必须放在临界区外——临界区内执行 Java 方法体会分配对象,
+ * 分配等待 GC、GC 又等待本线程退出临界区,两者互锁(每次调用卡数百 ms→ANR)。
+ *
+ * 返回原方法返回值(与反射路径语义一致:原方法抛异常时包装为 InvocationTargetException 抛出,
+ * 由 JNI 异常机制传递给 Java 侧)。
+ */
+jobject Pine_invokeBackupMethod0(JNIEnv* env, jclass, jobject javaOrigin, jobject javaBackup,
+                                 jobject thisObject, jobjectArray javaArgs) {
+    if (UNLIKELY(!javaOrigin || !javaBackup)) {
+        JNIHelper::Throw(env, "java/lang/NullPointerException", "origin or backup is null");
+        return nullptr;
+    }
+    auto origin = art::ArtMethod::FromReflectedMethod(env, javaOrigin);
+    auto backup = art::ArtMethod::FromReflectedMethod(env, javaBackup);
+    if (UNLIKELY(!origin || !backup)) {
+        // 避免用 JNIHelper::Throw 掩盖已挂起的 JNI 异常(带 pending exception 调 FindClass 是 UB)。
+        if (env->ExceptionCheck()) return nullptr;
+        JNIHelper::Throw(env, "java/lang/NullPointerException", "cannot resolve origin or backup ArtMethod");
+        return nullptr;
+    }
+
+    std::call_once(g_method_invoke_once, InitMethodInvokeId, env);
+    if (UNLIKELY(!g_method_invoke_id)) {
+        JNIHelper::Throw(env, "java/lang/UnsupportedOperationException",
+                "java.lang.reflect.Method.invoke is unavailable");
+        return nullptr;
+    }
+
+    void* self = art::Thread::Current(env);
+    jobject result = nullptr;
+
+    if (LIKELY(Android::HasGCCriticalSection())) {
+        // Android 11+ 且符号可用:临界区内仅同步 declaring class / JNI entry(纯 native 操作),
+        // 退出临界区后再反射调用 backup,避免 "临界区内分配 → GC 互锁" 导致的 ANR。
+        {
+            ScopedGCCriticalSection gcs(self, art::GcCause::kGcCauseDisableMovingGc,
+                                        art::CollectorType::kCollectorTypeCriticalSection);
+            SyncBackupMeta(env, origin, backup);
+        }
+        result = InvokeBackupReflection(env, javaBackup, thisObject, javaArgs);
+    } else {
+        // Android < 11 或符号缺失:无临界区保护,直接 "同步 + 反射调用"
+        // (与旧路径行为一致,保留 TOCTOU 风险;每次调用前仍重同步,尽量降低崩溃概率)。
+        SyncBackupMeta(env, origin, backup);
+        result = InvokeBackupReflection(env, javaBackup, thisObject, javaArgs);
+    }
+    return result;
+}
+
+void Pine_setDebuggable(JNIEnv*, jclass, jboolean debuggable) {
+    PineConfig::debuggable = static_cast<bool>(debuggable);
 }
 
 jlong Pine_currentArtThread0(JNIEnv* env, jclass) {
@@ -548,6 +606,24 @@ void Pine_makeClassesVisiblyInitialized(JNIEnv*, jclass, jlong thread) {
 
 jlong Pine_cloneExtras(JNIEnv*, jclass, jlong extras) {
     return reinterpret_cast<jlong>(reinterpret_cast<Extras*>(extras)->CloneAndUnlock());
+}
+
+/**
+ * 读取 bridge-jump trampoline 中保存的原始代码入口(unhook 恢复方法时使用)。
+ * 仅在 replacement 模式下调用(trampoline 为 bridge-jump 布局,偏移有效)。
+ */
+jlong Pine_getOriginEntry(JNIEnv*, jclass, jlong trampoline) {
+    return static_cast<jlong>(TrampolineInstaller::GetDefault()->GetOriginCodeEntry(
+            reinterpret_cast<void*>(trampoline)));
+}
+
+/**
+ * 恢复被 hook 方法的原始代码入口,使其不再经过 trampoline。
+ * 由 Java 侧在最后一个 callback 移除时调用(replacement 模式)。
+ */
+void Pine_restoreMethod0(JNIEnv*, jclass, jlong artMethod, jlong originEntry) {
+    reinterpret_cast<art::ArtMethod*>(artMethod)->SetEntryPointFromCompiledCode(
+            reinterpret_cast<void*>(originEntry));
 }
 
 static const struct {
@@ -563,15 +639,12 @@ static const struct {
         {"getObject0", "(JJ)Ljava/lang/Object;"},
         {"getAddress0", "(JLjava/lang/Object;)J"},
         {"setDebuggable0", "(Z)V"},
-        {"disableHiddenApiPolicy0", "(ZZ)V"},
         {"currentArtThread0", "()J"},
         {"cloneExtras", "(J)J"},
 #ifdef __aarch64__
         {"getArgsArm64", "(JJ[Z[J[J[D)V"}
 #elif defined(__arm__)
         {"getArgsArm32", "(II[I[I[F)V"}
-#elif defined(__i386__)
-        {"getArgsX86", "(I[II)V"}
 #endif
 };
 
@@ -585,7 +658,7 @@ void Pine_enableFastNative(JNIEnv* env, jclass Pine) {
 }
 
 static const JNINativeMethod gMethods[] = {
-        {"init0", "(IZZZZZ)V", (void*) Pine_init0},
+        {"init0", "(IZZZ)V", (void*) Pine_init0},
         {"enableFastNative", "()V", (void*) Pine_enableFastNative},
         {"getArtMethod", "(Ljava/lang/reflect/Member;)J", (void*) Pine_getArtMethod},
         {"hook0", "(JLjava/lang/Class;Ltop/canyie/pine/Pine$HookRecord;Ljava/lang/reflect/Member;Ljava/lang/reflect/Method;ZZZ)Ljava/lang/reflect/Method;", (void*) Pine_hook0},
@@ -596,19 +669,19 @@ static const JNINativeMethod gMethods[] = {
         {"setJitCompilationAllowed0", "(ZZ)V", (void*) Pine_setJitCompilationAllowed},
         {"disableProfileSaver0", "()Z", (void*) Pine_disableProfileSaver0},
         {"syncMethodInfo", "(Ljava/lang/reflect/Member;Ljava/lang/reflect/Method;Z)V", (void*) Pine_syncMethodInfo},
+        {"invokeBackupMethod0", "(Ljava/lang/reflect/Member;Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", (void*) Pine_invokeBackupMethod0},
         {"getObject0", "(JJ)Ljava/lang/Object;", (void*) Pine_getObject0},
         {"getAddress0", "(JLjava/lang/Object;)J", (void*) Pine_getAddress0},
         {"setDebuggable0", "(Z)V", (void*) Pine_setDebuggable},
-        {"disableHiddenApiPolicy0", "(ZZ)V", (void*) Pine_disableHiddenApiPolicy0},
         {"currentArtThread0", "()J", (void*) Pine_currentArtThread0},
         {"makeClassesVisiblyInitialized", "(J)V", (void*) Pine_makeClassesVisiblyInitialized},
         {"cloneExtras", "(J)J", (void*) Pine_cloneExtras},
+        {"getOriginEntry", "(J)J", (void*) Pine_getOriginEntry},
+        {"restoreMethod0", "(JJ)V", (void*) Pine_restoreMethod0},
 #ifdef __aarch64__
         {"getArgsArm64", "(JJ[Z[J[J[D)V", (void*) Pine_getArgsArm64}
 #elif defined(__arm__)
         {"getArgsArm32", "(II[I[I[F)V", (void*) Pine_getArgsArm32}
-#elif defined(__i386__)
-        {"getArgsX86", "(I[II)V", (void*) Pine_getArgsX86}
 #endif
 };
 

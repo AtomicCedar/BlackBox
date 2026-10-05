@@ -70,10 +70,6 @@ public class BEnvironment {
         return new File(getSystemDir(), "xposed-module.conf");
     }
 
-    public static File getFakeLocationConf() {
-        return new File(getSystemDir(), "fake-location.conf");
-    }
-
     /**
      * 宿主直通应用列表（每行一个包名，# 开头为注释）。
      * 这些应用不在容器内虚拟化，guest 的跨应用调用会直接放行到真实系统。
@@ -99,11 +95,42 @@ public class BEnvironment {
     }
 
     public static File getLibcHookDisableDir(int userId) {
-        return new File(getHotfixDir(), String.format(Locale.CHINA, "chook_disable/u%d", userId));
+        return new File(getHotfixDir(), String.format(Locale.CHINA, "libchook_disable/u%d", userId));
     }
 
     public static File getLibcHookDisableFile(int userId, String packageName) {
         return new File(getLibcHookDisableDir(userId), packageName);
+    }
+
+    public static File getMapsHideDir(int userId) {
+        return new File(getHotfixDir(), String.format(Locale.CHINA, "maps_hide/u%d", userId));
+    }
+
+    public static File getMapsHideFile(int userId, String packageName) {
+        return new File(getMapsHideDir(userId), packageName);
+    }
+
+    public static File getSoInjectDir(int userId) {
+        return new File(getHotfixDir(), String.format(Locale.CHINA, "so_inject/u%d", userId));
+    }
+
+    /** 启用标记：存在 = 该应用启用 so 注入 */
+    public static File getSoInjectFile(int userId, String packageName) {
+        return new File(getSoInjectDir(userId), packageName);
+    }
+
+    /** so 列表：每行一个注入的 so 文件名，禁用时不删除（重新启用列表还在） */
+    public static File getSoInjectListFile(int userId, String packageName) {
+        return new File(getSoInjectDir(userId), packageName + ".list");
+    }
+
+    public static File getDeviceSpoofDir(int userId) {
+        return new File(getHotfixDir(), String.format(Locale.CHINA, "device_spoof/u%d", userId));
+    }
+
+    /** 设备伪装配置：存在 = 该应用启用，内容为 key=value 行（见 DeviceSpoofConfig） */
+    public static File getDeviceSpoofFile(int userId, String packageName) {
+        return new File(getDeviceSpoofDir(userId), packageName);
     }
 
     public static File getPackageConf(String packageName) {

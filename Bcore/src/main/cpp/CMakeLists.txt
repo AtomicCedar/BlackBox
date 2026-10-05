@@ -3,7 +3,13 @@
 
 # Sets the minimum version of CMake required to build the native library.
 
-cmake_minimum_required(VERSION 3.4.1)
+cmake_minimum_required(VERSION 3.5.1)
+
+# AGP 所有变体都用 RelWithDebInfo（-O2 -g）编 native 且打包时不再自动剥离，
+# 这里把 RelWithDebInfo 的编译选项对齐 Release（去掉 -g）；链接加 -s 在链接期直接剥掉符号表
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -DNDEBUG")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s")
 
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.

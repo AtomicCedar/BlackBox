@@ -44,6 +44,12 @@ namespace pine {
             return kReplacementModeOnly;
         }
 
+        /** 读取 bridge-jump trampoline 中保存的原始代码入口(unhook 恢复方法时使用)。 */
+        uintptr_t GetOriginCodeEntry(void* trampoline) {
+            return *reinterpret_cast<uintptr_t*>(
+                    reinterpret_cast<uintptr_t>(trampoline) + kBridgeJumpTrampolineOriginCodeEntryOffset);
+        }
+
         bool CannotSafeInlineHook(size_t size) {
             return size < kDirectJumpTrampolineSize;
         }

@@ -3,12 +3,13 @@ plugins {
 }
 
 android {
-    compileSdkVersion 30
-    buildToolsVersion "30.0.3"
+    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion "36.1.0"
+    namespace 'top.niunaijun.jnihook'
 
     defaultConfig {
-        minSdkVersion 21
-        targetSdkVersion rootProject.ext.targetSdkVersion
+        minSdk 26
+        targetSdk rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
 
@@ -21,30 +22,18 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-    dexOptions {
-        preDexLibraries false
-        maxProcessCount 8
-        javaMaxHeapSize "4g"
-    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
-    aaptOptions {
-        cruncherEnabled = false
-        useNewCruncher = false
-    }
     testOptions {
         unitTests.returnDefaultValues = true
     }
-    lintOptions {
+    lint {
         checkReleaseBuilds false
         abortOnError false
         warningsAsErrors false
-        disable "UnusedResources", 'RestrictedApi'
-        textOutput "stdout"
-        textReport false
-        check 'NewApi', 'InlinedApi'
+        disable += ['UnusedResources', 'RestrictedApi']
     }
 }
 

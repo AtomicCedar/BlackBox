@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingTop="8dp">
+
+    <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+        <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/maps_hide_enable"
+                android:textColor="@color/primary_text"
+                android:textSize="15sp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/enable_switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/maps_hide_rules_section"
+            android:textColor="@color/primary_text"
+            android:textSize="13sp" />
+
+    <EditText
+            android:id="@+id/rules_edit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_maps_hide_input"
+            android:fontFamily="monospace"
+            android:gravity="top|start"
+            android:hint="@string/maps_hide_rules_input_hint"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:minLines="6"
+            android:padding="12dp"
+            android:textColor="@color/primary_text"
+            android:textColorHint="#BDBDBD"
+            android:textSize="13sp" />
+
+    <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_app_config_panel"
+            android:lineSpacingExtra="2dp"
+            android:padding="10dp"
+            android:text="@string/maps_hide_rules_hint"
+            android:textColor="@color/secondary_text"
+            android:textSize="12sp" />
+
+</LinearLayout>

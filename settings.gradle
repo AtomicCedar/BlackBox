@@ -1,3 +1,27 @@
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+rootProject.name = "BlackBox"
 include ':Bcore'
 include ':app'
 include ':Bcore:black-fake'
@@ -6,5 +30,3 @@ include ':Bcore:pine-xposed'
 include ':Bcore:pine-core'
 include ':Bcore:pine-xposed-res'
 include ':android-mirror'
-
-rootProject.name = "BlackBox"

@@ -2,10 +2,10 @@ package top.niunaijun.blackbox.utils;
 
 import java.io.File;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -21,7 +21,7 @@ import top.niunaijun.blackbox.BlackBoxCore;
  */
 public class AbiUtils {
     private final Set<String> mLibs = new HashSet<>();
-    private static final Map<File, AbiUtils> sAbiUtilsMap = new HashMap<>();
+    private static final Map<File, AbiUtils> sAbiUtilsMap = new ConcurrentHashMap<>();
 
     public static boolean isSupport(File apkFile) {
         AbiUtils abiUtils = sAbiUtilsMap.get(apkFile);

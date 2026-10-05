@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import top.niunaijun.blackbox.core.system.ISystemService;
+import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.core.system.pm.installer.CopyExecutor;
 import top.niunaijun.blackbox.core.system.pm.installer.CreatePackageExecutor;
 import top.niunaijun.blackbox.core.system.pm.installer.CreateUserExecutor;
@@ -11,6 +12,7 @@ import top.niunaijun.blackbox.core.system.pm.installer.Executor;
 import top.niunaijun.blackbox.core.system.pm.installer.RemoveAppExecutor;
 import top.niunaijun.blackbox.core.system.pm.installer.RemoveUserExecutor;
 import top.niunaijun.blackbox.entity.pm.InstallOption;
+import top.niunaijun.blackbox.utils.FileUtils;
 import top.niunaijun.blackbox.utils.Slog;
 
 /**
@@ -52,6 +54,9 @@ public class BPackageInstallerService extends IBPackageInstallerService.Stub imp
 
     @Override
     public int uninstallPackageAsUser(BPackageSettings ps, boolean removeApp, int userId) {
+        // 卸载时清理该应用的按应用配置（设备伪装/so 注入/maps 隐藏/libc hook 及注入 so 目录），
+        // 避免卸载后重装残留旧配置仍然生效
+        deleteHotfixConfig(ps.pkg.packageName, userId);
         List<Executor> executors = new ArrayList<>();
         if (removeApp) {
             // 移除App
@@ -68,6 +73,18 @@ public class BPackageInstallerService extends IBPackageInstallerService.Stub imp
             }
         }
         return 0;
+    }
+
+    private void deleteHotfixConfig(String packageName, int userId) {
+        try {
+            BEnvironment.getDeviceSpoofFile(userId, packageName).delete();
+            BEnvironment.getSoInjectFile(userId, packageName).delete();
+            BEnvironment.getSoInjectListFile(userId, packageName).delete();
+            BEnvironment.getMapsHideFile(userId, packageName).delete();
+            BEnvironment.getLibcHookDisableFile(userId, packageName).delete();
+            FileUtils.deleteDir(BEnvironment.getAppLibDir(packageName));
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override

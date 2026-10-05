@@ -36,6 +36,11 @@ public class CopyExecutor implements Executor {
             File origFile = new File(ps.pkg.baseCodePath);
             File newFile = BEnvironment.getBaseApkDir(ps.pkg.packageName);
             try {
+                // 上一次安装把 base.apk 置为只读（Android 16 writable dex 校验），
+                // 重装覆盖写前必须恢复写位，否则 copyFile 抛 IOException
+                if (newFile.exists()) {
+                    newFile.setWritable(true);
+                }
                 if (option.isFlag(InstallOption.FLAG_URI_FILE)) {
                     boolean b = FileUtils.renameTo(origFile, newFile);
                     if (!b) {
@@ -46,6 +51,10 @@ public class CopyExecutor implements Executor {
                 }
                 // update baseCodePath
                 ps.pkg.baseCodePath = newFile.getAbsolutePath();
+                // Android 16+ 禁止从可写路径加载 dex（Writable dex file is not allowed），
+                // 拷贝进容器数据目录的分身 APK 必须去掉写位才能通过系统校验；
+                // 重装覆盖前由安装流程恢复可写（见 BEnvironment.getBaseApkDir 使用方归零写位）
+                newFile.setReadOnly();
             } catch (IOException e) {
                 e.printStackTrace();
                 return -1;

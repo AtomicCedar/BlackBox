@@ -4,6 +4,8 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -54,7 +56,13 @@ public class DaemonService extends Service {
     private void showNotification() {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), getPackageName() + ".blackbox_core")
                 .setPriority(NotificationCompat.PRIORITY_MAX);
-        startForeground(NOTIFY_ID, builder.build());
+        // Android 14+ (targetSdk 34+) 前台服务必须显式声明类型，无类型 startForeground 抛
+        // MissingForegroundServiceTypeException（守护保活无业务前台场景，用 specialUse）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFY_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(NOTIFY_ID, builder.build());
+        }
     }
 
     public static class DaemonInnerService extends Service {

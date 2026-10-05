@@ -18,6 +18,7 @@ import de.robv.android.xposed.XC_MethodHook.MethodHookParam;
 
 import top.canyie.pine.Pine;
 import top.canyie.pine.callback.MethodHook;
+import top.canyie.pine.utils.HiddenApiCompat;
 import top.canyie.pine.xposed.PineXposed;
 
 /**
@@ -220,7 +221,7 @@ public final class XposedBridge {
 	@SuppressWarnings("UnusedReturnValue")
 	public static Set<XC_MethodHook.Unhook> hookAllMethods(Class<?> hookClass, String methodName, XC_MethodHook callback) {
 		Set<XC_MethodHook.Unhook> unhooks = new HashSet<>();
-		for (Member method : hookClass.getDeclaredMethods())
+		for (Member method : HiddenApiCompat.getDeclaredMethods(hookClass))
 			if (method.getName().equals(methodName))
 				unhooks.add(hookMethod(method, callback));
 		return unhooks;
@@ -236,7 +237,7 @@ public final class XposedBridge {
 	@SuppressWarnings("UnusedReturnValue")
 	public static Set<XC_MethodHook.Unhook> hookAllConstructors(Class<?> hookClass, XC_MethodHook callback) {
 		Set<XC_MethodHook.Unhook> unhooks = new HashSet<>();
-		for (Member constructor : hookClass.getDeclaredConstructors())
+		for (Member constructor : HiddenApiCompat.getDeclaredConstructors(hookClass))
 			unhooks.add(hookMethod(constructor, callback));
 		return unhooks;
 	}

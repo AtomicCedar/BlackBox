@@ -46,6 +46,35 @@ public class NativeCore {
     public static native void hideXposed();
 
     /**
+     * 注册一条 /proc/self/maps 扩展规则（mode 0=删行，1=改行）。
+     * 引擎 so 名单（libpine/libblackbox）始终生效，此表按应用配置，
+     * 需在每次应用进程启动时重新注册（先 clearMapsRules 再逐条 add）。
+     */
+    public static native void addMapsRule(int mode, String key, String value);
+
+    /**
+     * 清空 maps 扩展规则表（应用进程启动时序中先调用，避免跨应用残留）。
+     */
+    public static native void clearMapsRules();
+
+    /**
+     * 注册一条设备伪装属性规则（key=value，命中 __system_property_get 时返回伪装值）。
+     * 进程级，应用进程启动时序中按应用配置逐条注册（先 clearPropRules 再逐条 add）。
+     */
+    public static native void addPropRule(String key, String value);
+
+    /**
+     * 清空设备伪装属性表（应用进程启动时序中先调用，避免跨应用残留）。
+     */
+    public static native void clearPropRules();
+
+    /**
+     * 注入 so 内存加载：绕过系统 linker 把指定 so 加载进匿名内存并调用其
+     * JNI_OnLoad（磁盘无文件映射、maps 无文件路径）。加载器驻留内存。
+     */
+    public static native boolean memLoadSo(String path);
+
+    /**
      * 应用或 Xposed 模块在运行期加载了新的 native 库后调用，
      * 重新扫描并为新库的 GOT 打上 IO 重定向补丁。
      */

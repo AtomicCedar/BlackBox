@@ -1,6 +1,8 @@
 package top.niunaijun.blackbox.core.system.am;
 
 import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -85,11 +87,28 @@ public class BroadcastManager implements PackageMonitor {
                 List<BPackage.ActivityIntentInfo> intents = receiver.intents;
                 for (BPackage.ActivityIntentInfo intent : intents) {
                     ProxyBroadcastReceiver proxyBroadcastReceiver = new ProxyBroadcastReceiver();
-                    BlackBoxCore.getContext().registerReceiver(proxyBroadcastReceiver, intent.intentFilter);
+                    // Android 13+ (targetSdk 33+) 动态注册非系统广播必须显式声明 exported：
+                    // 系统广播（action 以 android. 开头）用 NOT_EXPORTED，分身体自定义广播用 EXPORTED（需能收外部广播）
+                    BlackBoxCore.getContext().registerReceiver(proxyBroadcastReceiver, intent.intentFilter,
+                            isSystemBroadcast(intent) ? Context.RECEIVER_NOT_EXPORTED : Context.RECEIVER_EXPORTED);
                     addReceiver(bPackage.packageName, proxyBroadcastReceiver);
                 }
             }
         }
+    }
+
+    private boolean isSystemBroadcast(BPackage.ActivityIntentInfo intent) {
+        IntentFilter filter = intent.intentFilter;
+        if (filter == null || filter.countActions() == 0) {
+            return false;
+        }
+        for (int i = 0; i < filter.countActions(); i++) {
+            String action = filter.getAction(i);
+            if (action == null || !action.startsWith("android.")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void addReceiver(String packageName, BroadcastReceiver receiver) {

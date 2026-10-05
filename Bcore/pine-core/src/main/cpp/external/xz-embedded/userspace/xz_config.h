@@ -53,10 +53,9 @@
 #define min_t(type, x, y) min(x, y)
 
 #ifndef fallthrough
-#	if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311
+#	if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202000
 #		define fallthrough [[fallthrough]]
-#	elif (defined(__GNUC__) && __GNUC__ >= 7) \
-			|| (defined(__clang_major__) && __clang_major__ >= 10)
+#	elif defined(__GNUC__) && __GNUC__ >= 7
 #		define fallthrough __attribute__((__fallthrough__))
 #	else
 #		define fallthrough do {} while (0)
@@ -96,7 +95,7 @@ static inline uint32_t get_unaligned_le32(const uint8_t *buf)
 #ifndef get_unaligned_be32
 static inline uint32_t get_unaligned_be32(const uint8_t *buf)
 {
-	return (uint32_t)((uint32_t)buf[0] << 24)
+	return (uint32_t)(buf[0] << 24)
 			| ((uint32_t)buf[1] << 16)
 			| ((uint32_t)buf[2] << 8)
 			| (uint32_t)buf[3];
@@ -124,15 +123,12 @@ static inline void put_unaligned_be32(uint32_t val, uint8_t *buf)
 #endif
 
 /*
- * To keep things simpler, use the generic unaligned methods also for
- * aligned access. The only place where performance could matter is
- * SHA-256 but files using SHA-256 aren't common.
+ * Use get_unaligned_le32() also for aligned access for simplicity. On
+ * little endian systems, #define get_le32(ptr) (*(const uint32_t *)(ptr))
+ * could save a few bytes in code size.
  */
 #ifndef get_le32
 #	define get_le32 get_unaligned_le32
-#endif
-#ifndef get_be32
-#	define get_be32 get_unaligned_be32
 #endif
 
 #endif

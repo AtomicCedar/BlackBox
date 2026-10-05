@@ -27,7 +27,6 @@ public class AppSystemEnv {
     private static final String TAG = "AppSystemEnv";
 
     private static final List<String> sSystemPackages = new ArrayList<>();
-    private static final List<String> sSuPackages = new ArrayList<>();
     private static final List<String> sXposedPackages = new ArrayList<>();
     private static final List<String> sPreInstallPackages = new ArrayList<>();
 
@@ -81,14 +80,6 @@ public class AppSystemEnv {
 
         // oppo
         sSystemPackages.add("com.coloros.safecenter");
-
-        // su
-        sSuPackages.add("com.noshufou.android.su");
-        sSuPackages.add("com.noshufou.android.su.elite");
-        sSuPackages.add("eu.chainfire.supersu");
-        sSuPackages.add("com.koushikdutta.superuser");
-        sSuPackages.add("com.thirdparty.superuser");
-        sSuPackages.add("com.yellowes.su");
 
         sXposedPackages.add("de.robv.android.xposed.installer");
 
@@ -207,12 +198,7 @@ public class AppSystemEnv {
     }
 
     public static boolean isBlackPackage(String packageName) {
-        if (BlackBoxCore.get().isHideRoot() && sSuPackages.contains(packageName)) {
-            return true;
-        } else if (BlackBoxCore.get().isHideXposed() && sXposedPackages.contains(packageName)) {
-            return true;
-        }
-        return false;
+        return BlackBoxCore.get().isHideXposed() && sXposedPackages.contains(packageName);
     }
 
     public static List<String> getPreInstallPackages() {

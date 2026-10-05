@@ -13,7 +13,7 @@ import java.util.Locale;
     /**
      * Whether we need to print more detailed logs.
      */
-    public static boolean debug = true;
+    public static boolean debug = false;
 
     /**
      * Whether the current process is debuggable.
@@ -30,10 +30,26 @@ import java.util.Locale;
      */
     public static boolean useFastNative;
     /** Set to true will try to hide certain features. Some information used for debugging may be erased.  */
-    public static boolean antiChecks;
-    /** Set to true will disable the hidden api policy for application domain */
+    public static boolean antiChecks = true;
+    /**
+     * Set to true will disable the hidden api policy.
+     * <p>
+     * Implemented with the official data interface {@code VMRuntime.setHiddenApiExemptions()}
+     * (via {@code top.canyie.pine.utils.HiddenApiBypass}): it only writes runtime data
+     * and does NOT modify libart.so's .text section, so integrity checks (CRC of .text etc.)
+     * will not be triggered. The exemption is applied once at {@link Pine#ensureInitialized()}
+     * and cannot be revoked afterwards (ART caches access flags).
+     * <p>
+     * NOTE: {@code setHiddenApiExemptions} is process-wide and does not distinguish domains,
+     * so this flag and {@link #disableHiddenApiPolicyForPlatformDomain} are equivalent —
+     * if either is {@code true}, a full (all-prefix) exemption is applied.
+     * <p>
+     * If the exemption cannot be applied (library unavailable), Pine logs an error and hidden
+     * APIs remain restricted; use {@link top.canyie.pine.utils.HiddenApiCompat} /
+     * {@link top.canyie.pine.utils.PinePass} to access hidden members on demand.
+     */
     public static boolean disableHiddenApiPolicy = true;
-    /** Set to true will disable the hidden api policy for platform domain */
+    /** Set to true will disable the hidden api policy. Equivalent to {@link #disableHiddenApiPolicy} (see its note). */
     public static boolean disableHiddenApiPolicyForPlatformDomain = true;
 
     /**
@@ -48,10 +64,10 @@ import java.util.Locale;
 
     static {
         sdkLevel = Build.VERSION.SDK_INT;
-        if (sdkLevel == 34 /* Build.VERSION_CODES.UPSIDE_DOWN_CAKE, not in this project compileSdk */) {
+        if (sdkLevel == Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             if (isAtLeastPreReleaseCodename("VanillaIceCream")) {
                 // Android 15 (VanillaIceCream) Preview
-                sdkLevel = 34 /* Build.VERSION_CODES.UPSIDE_DOWN_CAKE, not in this project compileSdk */ + 1;
+                sdkLevel = Build.VERSION_CODES.UPSIDE_DOWN_CAKE + 1;
             }
         }
     }

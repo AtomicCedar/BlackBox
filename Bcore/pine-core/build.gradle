@@ -1,24 +1,22 @@
 apply plugin: 'com.android.library'
 
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
-    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion "36.1.0"
+    namespace "top.canyie.pine"
 
     defaultConfig {
-        minSdkVersion 19
-        targetSdkVersion rootProject.ext.targetSdkVersion
+        minSdk 26
+        targetSdk rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'
 
         externalNativeBuild {
             cmake {
-                cFlags '-Wall -Wextra -fvisibility=hidden -fvisibility-inlines-hidden'
-                cppFlags '-std=c++17 -fno-exceptions -fno-rtti'
-                arguments '-DANDROID_STL=c++_static'
-                abiFilters 'armeabi-v7a', 'arm64-v8a'
+                arguments '-DANDROID_STL=none'
+                abiFilters 'arm64-v8a'
                 targets 'pine'
             }
         }
@@ -31,33 +29,36 @@ android {
         }
     }
 
+    compileOptions {
+        // Java 11 required by utils/HiddenApiBypass* (synced from org.lsposed.hiddenapibypass)
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    ndkVersion "29.0.14206865"
+
     externalNativeBuild {
         cmake {
             path "src/main/cpp/CMakeLists.txt"
+            version "4.1.2"
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += '/META-INF/**'
+            excludes += '/*.properties'
         }
     }
 
     buildFeatures {
-        // prefab true
+        prefab true
     }
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    // implementation 'dev.rikka.ndk.thirdparty:cxx:1.1.0'
+    implementation 'org.lsposed.libcxx:libcxx:29.0.14206865'
+    // Compile-time stubs for sun.misc.Unsafe / dalvik.system.VMRuntime, never shipped
+    compileOnly files('stub-libs/runtime-stubs.jar')
 }
-
-/*
-apply plugin: 'com.novoda.bintray-release'
-
-publish {
-    userOrg = rootProject.userOrg
-    repoName = rootProject.repoName
-    groupId = rootProject.groupId
-    artifactId = 'core'
-    publishVersion = '0.2.5'
-    desc = 'pine hook core library'
-    licences = rootProject.licences
-    website = rootProject.website
-}
- */

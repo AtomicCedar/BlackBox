@@ -7,7 +7,6 @@
 
 extern "C" {
 
-#ifndef __i386__
 #ifdef __arm__
 void pine_thumb_direct_jump_trampoline();
 void pine_thumb_direct_jump_trampoline_jump_entry();
@@ -58,7 +57,6 @@ void pine_backup_trampoline_override_space();
 void pine_backup_trampoline_remaining_code_entry();
 
 void pine_trampolines_end();
-#endif
 #endif
 };
 

@@ -6,6 +6,7 @@
 #define PINE_SCOPED_LOCAL_REF_H
 
 #include "macros.h"
+#include <cstddef>
 
 template<typename T>
 class ScopedLocalRef {

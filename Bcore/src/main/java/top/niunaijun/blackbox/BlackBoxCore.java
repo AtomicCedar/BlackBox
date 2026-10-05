@@ -28,7 +28,7 @@ import java.util.Map;
 
 import black.android.app.BRActivityThread;
 import black.android.os.BRUserHandle;
-import me.weishu.reflection.Reflection;
+import org.lsposed.hiddenapibypass.HiddenApiBypass;
 import top.canyie.pine.PineConfig;
 import top.niunaijun.blackbox.app.LauncherActivity;
 import top.niunaijun.blackbox.app.configuration.AppLifecycleCallback;
@@ -122,7 +122,8 @@ public class BlackBoxCore extends ClientConfiguration {
         if (clientConfiguration == null) {
             throw new IllegalArgumentException("ClientConfiguration is null!");
         }
-        Reflection.unseal(context);
+        // 整包豁免隐藏 API，空前缀 = 全部类
+        HiddenApiBypass.setHiddenApiExemptions("");
         sContext = context;
         mClientConfiguration = clientConfiguration;
         initNotificationManager();
@@ -388,11 +389,6 @@ public class BlackBoxCore extends ClientConfiguration {
 
     public boolean isServerProcess() {
         return mProcessType == ProcessType.Server;
-    }
-
-    @Override
-    public boolean isHideRoot() {
-        return mClientConfiguration.isHideRoot();
     }
 
     @Override

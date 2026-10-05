@@ -10,11 +10,11 @@
 #include <Hook/VMClassLoaderHook.h>
 #include <Hook/UnixFileSystemHook.h>
 #include <Hook/NativeIOHook.h>
+#include <Hook/MemLoader.h>
 #include <Hook/UnityCompatPatch.h>
 #include <Hook/LibXposedNative.h>
 #include <Hook/BinderHook.h>
 #include <Hook/RuntimeHook.h>
-#include "Utils/HexDump.h"
 
 struct {
     JavaVM *vm;
@@ -121,6 +121,56 @@ void enableIO(JNIEnv *env, jclass clazz) {
     }
 }
 
+// 按应用配置 /proc/*/maps 扩展规则（mode 0=删行，1=改行）。引擎 so 名单
+// 始终生效，此表在应用进程启动时序中由 Java 侧逐条注册。
+void addMapsRule(JNIEnv *env, jclass clazz, jint mode, jstring key, jstring value) {
+    if (key == nullptr) {
+        return;
+    }
+    const char *keyC = env->GetStringUTFChars(key, nullptr);
+    const char *valueC = value == nullptr ? nullptr : env->GetStringUTFChars(value, nullptr);
+    if (keyC != nullptr) {
+        NativeIOHook::addMapsRule(mode, keyC, valueC);
+        env->ReleaseStringUTFChars(key, keyC);
+    }
+    if (valueC != nullptr) {
+        env->ReleaseStringUTFChars(value, valueC);
+    }
+}
+
+void clearMapsRules(JNIEnv *env, jclass clazz) {
+    NativeIOHook::clearMapsRules();
+}
+
+// 设备伪装属性：按应用配置注册 key=value，命中 __system_property_get 时返回伪装值
+void addPropRule(JNIEnv *env, jclass clazz, jstring key, jstring value) {
+    if (key == nullptr || value == nullptr) {
+        return;
+    }
+    const char *keyC = env->GetStringUTFChars(key, nullptr);
+    const char *valueC = env->GetStringUTFChars(value, nullptr);
+    if (keyC != nullptr && valueC != nullptr) {
+        NativeIOHook::addPropRule(keyC, valueC);
+    }
+    if (keyC != nullptr) env->ReleaseStringUTFChars(key, keyC);
+    if (valueC != nullptr) env->ReleaseStringUTFChars(value, valueC);
+}
+
+void clearPropRules(JNIEnv *env, jclass clazz) {
+    NativeIOHook::clearPropRules();
+}
+
+// 注入 so 内存加载：绕过系统 linker 加载指定 so 并调用其 JNI_OnLoad。
+// 加载器驻留内存（so 代码/数据在匿名映像里），返回是否成功。
+jboolean memLoadSo(JNIEnv *env, jclass clazz, jstring path) {
+    if (path == nullptr) return JNI_FALSE;
+    const char *pathC = env->GetStringUTFChars(path, nullptr);
+    if (pathC == nullptr) return JNI_FALSE;
+    bool ok = MemLoader::load(pathC, BoxCore::getJavaVM());
+    env->ReleaseStringUTFChars(path, pathC);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 void rescanIOHook(JNIEnv *env, jclass clazz) {
     if (g_libc_hook_enabled) {
         NativeIOHook::install();
@@ -159,6 +209,11 @@ static JNINativeMethod gMethods[] = {
         {"addIORule",  "(Ljava/lang/String;Ljava/lang/String;)V", (void *) addIORule},
         {"enableLibcHook", "(Z)V",                                (void *) enableLibcHook},
         {"enableIO",   "()V",                                     (void *) enableIO},
+        {"addMapsRule", "(ILjava/lang/String;Ljava/lang/String;)V", (void *) addMapsRule},
+        {"clearMapsRules", "()V",                                 (void *) clearMapsRules},
+        {"addPropRule", "(Ljava/lang/String;Ljava/lang/String;)V", (void *) addPropRule},
+        {"clearPropRules", "()V",                                 (void *) clearPropRules},
+        {"memLoadSo", "(Ljava/lang/String;)Z",                    (void *) memLoadSo},
         {"rescanIOHook", "()V",                                   (void *) rescanIOHook},
         {"patchUnityCompat", "(Ljava/lang/String;)Z",             (void *) patchUnityCompat},
         {"addXposedNativeLibs", "([Ljava/lang/String;)V",         (void *) addXposedNativeLibs},

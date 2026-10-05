@@ -32,7 +32,7 @@ void (*Android::make_visibly_initialized_)(void*, void*, bool) = nullptr;
 void* Android::jit_code_cache_ = nullptr;
 void (*Android::move_obsolete_method_)(void*, void*, void*) = nullptr;
 
-void Android::Init(JNIEnv* env, int sdk_version, bool disable_hiddenapi_policy, bool disable_hiddenapi_policy_for_platform) {
+void Android::Init(JNIEnv* env, int sdk_version) {
     Android::version = sdk_version;
     if (UNLIKELY(env->GetJavaVM(&jvm_) != JNI_OK)) {
         LOGF("Cannot get java vm");
@@ -94,8 +94,10 @@ void Android::Init(JNIEnv* env, int sdk_version, bool disable_hiddenapi_policy, 
             }
         }
 
-        if (Android::version >= Android::kP)
-            DisableHiddenApiPolicy(&art_lib_handle, disable_hiddenapi_policy, disable_hiddenapi_policy_for_platform);
+        // Hidden API policy is no longer disabled in native code.
+        // Global exemptions are applied on the Java side via
+        // VMRuntime.setHiddenApiExemptions() (HiddenApiBypass), which only writes runtime
+        // data and does NOT modify libart.so's .text section.
 
         art::Thread::Init(&art_lib_handle);
         art::ArtMethod::Init(&art_lib_handle);
@@ -111,59 +113,6 @@ void Android::Init(JNIEnv* env, int sdk_version, bool disable_hiddenapi_policy, 
     WellKnownClasses::Init(env);
 }
 
-static int FakeHandleHiddenApi() {
-    return 0;
-}
-
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "cppcoreguidelines-macro-usage"
-
-void Android::DisableHiddenApiPolicy(const ElfImage* handle, bool application, bool platform) {
-    auto trampoline_installer = TrampolineInstaller::GetDefault();
-    void* replace = reinterpret_cast<void*>(FakeHandleHiddenApi);
-    bool failed = false;
-
-#define HOOK_SYMBOL(symbol, warn_if_missing) do { \
-void *target = handle->GetSymbolAddress(symbol, warn_if_missing); \
-if (LIKELY(target))  \
-    trampoline_installer->NativeHookNoBackup(target, replace); \
-else  \
-    failed = true; \
-} while(false)
-
-    if (Android::version >= Android::kQ) {
-        if (LIKELY(application)) {
-            // Android Q, for Domain::kApplication
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail28ShouldDenyAccessToMemberImplINS_8ArtFieldEEEbPT_NS0_7ApiListENS0_12AccessMethodE", false);
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail28ShouldDenyAccessToMemberImplINS_9ArtMethodEEEbPT_NS0_7ApiListENS0_12AccessMethodE", false);
-        }
-
-        if (LIKELY(platform)) {
-            // For Domain::kPlatform
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail30HandleCorePlatformApiViolationINS_8ArtFieldEEEbPT_RKNS0_13AccessContextENS0_12AccessMethodENS0_17EnforcementPolicyE", false);
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail30HandleCorePlatformApiViolationINS_9ArtMethodEEEbPT_RKNS0_13AccessContextENS0_12AccessMethodENS0_17EnforcementPolicyE", false);
-        }
-
-        if (UNLIKELY(failed)) {
-            // These functions are inlined for arm32 on Android 15, but not for arm64
-            // If any symbol cannot be found, fallback to hook ShouldDenyAccessToMember
-            // The flag will only be set if we need the feature, so we don't need to check it
-
-            HOOK_SYMBOL("_ZN3art9hiddenapi24ShouldDenyAccessToMemberINS_8ArtFieldEEEbPT_RKNSt3__18functionIFNS0_13AccessContextEvEEENS0_12AccessMethodE", true);
-            HOOK_SYMBOL("_ZN3art9hiddenapi24ShouldDenyAccessToMemberINS_9ArtMethodEEEbPT_RKNSt3__18functionIFNS0_13AccessContextEvEEENS0_12AccessMethodE", true);
-        }
-    } else {
-        // Android P, all accesses from platform domain will be allowed
-        if (LIKELY(application)) {
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail19GetMemberActionImplINS_8ArtFieldEEENS0_6ActionEPT_NS_20HiddenApiAccessFlags7ApiListES4_NS0_12AccessMethodE", true);
-            HOOK_SYMBOL("_ZN3art9hiddenapi6detail19GetMemberActionImplINS_9ArtMethodEEENS0_6ActionEPT_NS_20HiddenApiAccessFlags7ApiListES4_NS0_12AccessMethodE", true);
-        }
-    }
-
-#undef HOOK_SYMBOL
-}
-
-#pragma clang diagnostic pop
 
 static bool FakeProcessProfilingInfo() {
     LOGI("Skipped ProcessProfilingInfo.");

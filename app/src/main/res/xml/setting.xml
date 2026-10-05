@@ -21,21 +21,27 @@
 
         <Preference
                 android:key="gms_manager"
-                android:title="@string/gms_manager"
-                android:summary="@string/jump_gms"/>
+                android:title="@string/gms_manager"/>
 
         <SwitchPreferenceCompat
                 app:key="xp_hide"
                 app:title="@string/hide_xposed" />
 
-        <SwitchPreferenceCompat
-                app:key="root_hide"
-                app:title="@string/hide_root" />
-
         <Preference
                 android:key="libc_hook_disable"
-                android:title="@string/libc_hook_disable"
-                android:summary="@string/libc_hook_disable_summary"/>
+                android:title="@string/libc_hook_disable"/>
+
+        <Preference
+                android:key="maps_hide"
+                android:title="@string/maps_hide"/>
+
+        <Preference
+                android:key="so_inject"
+                android:title="@string/so_inject"/>
+
+        <Preference
+                android:key="device_spoof"
+                android:title="@string/device_spoof"/>
 
         <SwitchPreferenceCompat
                 app:key="daemon_enable"

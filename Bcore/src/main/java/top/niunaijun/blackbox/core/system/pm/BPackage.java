@@ -52,6 +52,9 @@ public class BPackage implements Parcelable {
     public ApplicationInfo applicationInfo;
     public String mVersionName;
     public String baseCodePath;
+    // 多 APK（split）包的附属 APK 路径：GMS/Play 商店等按系统方式导入时
+    // 引用宿主 split 文件；外部安装的 split 包为空。查询与资源加载时与 base 一起挂载
+    public String[] splitSourceDirs;
 
     public int mSharedUserLabel;
     // Applications hardware preferences
@@ -141,6 +144,8 @@ public class BPackage implements Parcelable {
         this.applicationInfo = aPackage.applicationInfo;
         this.mVersionName = aPackage.mVersionName;
         this.baseCodePath = aPackage.baseCodePath;
+        this.splitSourceDirs = aPackage.applicationInfo != null
+                ? aPackage.applicationInfo.splitSourceDirs : null;
         this.mSharedUserLabel = aPackage.mSharedUserLabel;
         this.configPreferences = aPackage.configPreferences;
         this.reqFeatures = aPackage.reqFeatures;
@@ -231,6 +236,7 @@ public class BPackage implements Parcelable {
         this.applicationInfo = in.readParcelable(ApplicationInfo.class.getClassLoader());
         this.mVersionName = in.readString();
         this.baseCodePath = in.readString();
+        this.splitSourceDirs = in.createStringArray();
         this.mSharedUserLabel = in.readInt();
         this.configPreferences = in.createTypedArrayList(ConfigurationInfo.CREATOR);
         this.reqFeatures = in.createTypedArrayList(FeatureInfo.CREATOR);
@@ -721,6 +727,7 @@ public class BPackage implements Parcelable {
         dest.writeParcelable(this.applicationInfo, flags);
         dest.writeString(this.mVersionName);
         dest.writeString(this.baseCodePath);
+        dest.writeStringArray(this.splitSourceDirs);
         dest.writeInt(this.mSharedUserLabel);
         dest.writeTypedList(this.configPreferences);
         dest.writeTypedList(this.reqFeatures);

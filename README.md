@@ -1,5 +1,4 @@
 ![xx](assets/banner.png)
-### [English Version](README_EN.md)
 
 # 虚拟引擎 · BlackBox
 > The only people who have anything to fear from free software are those whose products are worth even less. 
@@ -14,25 +13,34 @@
 黑盒BlackBox，是一款虚拟引擎，可以在Android上克隆、运行虚拟应用，拥有免安装运行能力。黑盒可以掌控被运行的虚拟应用，做任何想做的事情。
 
 ## 支持
-暂不考虑4x，目前已兼容 5.0 ～ 16.0。
+已兼容 8.0 ～ 16.0。
 
-本 Fork 相比上游的主要改动（Android 16 适配）：
+本 Fork 相比上游的主要改动：
 - 修复虚拟应用启动失败（`HCallbackProxy` 空指针与 Android 16 上 `LaunchActivityItem` 换入失效导致的启动死循环）
 - 修复容器内 WebView 报 `net::ERR_CACHE_MISS`（`checkSelfPermission(INTERNET)` 误判 DENIED 导致 WebView 禁网，见 `checkPermissionForDevice` 等权限查询 hook）
 - 修复容器内 Unity 2021.3/2022.3 游戏开屏即退（见下方「Unity 游戏兼容」）
 - 新增热修复：长按应用可配置补丁 dex，分身启动前注入到类加载器（见下方「热修复」）
+- 新增按应用设备伪装（机器模拟）：`Build` 字段 + 系统属性双通道 + SIM + 唯一标识，一键随机整套对齐真实机型（机型库 SQLite 资产）
+- 新增按应用 So 注入：分身体启动自动加载注入 so，支持自定义 ELF 内存加载（失败自动兜底系统加载），并自动隐藏 maps 痕迹
+- 新增反多开检测对抗：虚拟路径全链路伪装（`access` 目录探测拦截、`dl_iterate_phdr` / `readlink` 双向映射、`getPackageCodePath` 伪装、GOT 补扫）
+- 新增按应用 Maps 隐藏规则与 libc hook 禁用开关
+- 容器 PMS 支持 split APK（多 APK 包），GMS/Play 商店按系统导入时引用宿主 split 文件
+- 引擎层重构：Pine 源码内置、反检测增强
 
-如果条件允许，降级targetSdkVersion到28或以下可以获得更好的兼容性。
+## 新增功能限制与注意
+- 设备伪装不做基站信息（LAC/CID）伪装；机型库仅收录 Android 手机，一键随机系统版本不低于真机
+- So 注入仅支持 arm64-v8a；内存加载对复杂 so（TLS / C++ 异常 / 多 so 互依）支持不完整，失败自动兜底系统加载
+- Maps 隐藏与禁用 libc hook 共用 GOT 通路，禁用 libc hook 后该应用的 Maps 隐藏规则与 native 层路径伪装一并失效
+- 虚拟路径伪装只覆盖接口层（Java API / GOT 补丁），裸 syscall 直读拦不住
+- 各功能修改配置后需重启分身体生效；卸载分身自动清理对应配置
 
 ***稳定性未经大量测试，仅供学习交流，请勿用于其他用途***
 
-## 编译版本下载
-稳定版与测试版下载
-- 稳定版 由管理员手动发布经过验证稳定后的版本。[下载地址](https://github.com/FBlackBox/BlackBox/releases)
-- 测试版 由机器自动编译最新的代码的版本，可体验最新体验也有可能存在问题。 [下载地址](https://github.com/AutoBlackBox/BlackBox/tags)
+## 稳定版下载
+[下载地址](https://github.com/FBlackBox/BlackBox/releases)
 
 ## 架构说明
-本项目区分32位与64位，目前是2个不同的app，如在Demo已安装列表内无法找到需要开启的app说明不支持，请编译其他的架构。
+仅支持 arm64-v8a（64 位）
 
 ## 如何使用
 ### Step 1.初始化，在Application中加入以下代码初始化
@@ -282,7 +290,7 @@ com.example.companion
 - [VirtualApp](https://github.com/asLody/VirtualApp)
 - [VirtualAPK](https://github.com/didi/VirtualAPK)
 - [BlackReflection](https://github.com/CodingGay/BlackReflection)
-- [FreeReflection](https://github.com/tiann/FreeReflection)
+- [HiddenApiBypass](https://github.com/LSPosed/AndroidHiddenApiBypass)
 - [Pine](https://github.com/canyie/pine)
 
 ### License

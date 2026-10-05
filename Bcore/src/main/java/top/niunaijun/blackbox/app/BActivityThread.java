@@ -67,7 +67,10 @@ import top.niunaijun.blackbox.core.CrashHandler;
 import top.niunaijun.blackbox.core.IBActivityThread;
 import top.niunaijun.blackbox.core.IOCore;
 import top.niunaijun.blackbox.core.LibcHookConfig;
+import top.niunaijun.blackbox.core.MapsHideConfig;
 import top.niunaijun.blackbox.core.NativeCore;
+import top.niunaijun.blackbox.core.SoInjectConfig;
+import top.niunaijun.blackbox.core.DeviceSpoofConfig;
 import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.core.env.VirtualRuntime;
 import top.niunaijun.blackbox.core.system.user.BUserHandle;
@@ -337,7 +340,10 @@ public class BActivityThread extends IBActivityThread.Stub {
         Context packageContext = createPackageContext(applicationInfo);
         Object loadedApk = BRContextImpl.get(packageContext).mPackageInfo();
         BRLoadedApk.get(loadedApk)._set_mSecurityViolation(false);
-        // fix applicationInfo
+        // fix applicationInfo（保持真实路径：LoadedApk 的 dex/内嵌 lib 路径与
+        // sourceDir 强耦合，改字段会让 ART/linker 直接 open 伪装路径——它们绕过
+        // GOT，IO 规则拦不住，导致 ClassNotFoundException。APK 路径伪装改由
+        // ContextImpl.getPackageCodePath 的 hook 提供，见 DeviceSpoofConfig）
         BRLoadedApk.get(loadedApk)._set_mApplicationInfo(applicationInfo);
 
         int targetSdkVersion = applicationInfo.targetSdkVersion;
@@ -364,6 +370,24 @@ public class BActivityThread extends IBActivityThread.Stub {
         NativeCore.init(Build.VERSION.SDK_INT);
         // 用户可对指定应用禁用 libc GOT hook（反作弊兼容开关），需在 enableIO 前设置
         NativeCore.enableLibcHook(!LibcHookConfig.isDisabled(getUserId(), packageName));
+        // 按应用启用 /proc/self/maps 扩展规则（删行/改行伪装），需在 enableIO 前注册，
+        // 先清空避免跨应用残留，再逐条添加该应用规则文件里的规则
+        NativeCore.clearMapsRules();
+        for (String rule : MapsHideConfig.getRules(getUserId(), packageName)) {
+            if (rule.length() < 3) {
+                continue;
+            }
+            char mode = rule.charAt(0);
+            String body = rule.substring(2).trim();
+            if (mode == 'r' && !body.isEmpty()) {
+                NativeCore.addMapsRule(0, body, null);
+            } else if (mode == 'm') {
+                int sep = body.indexOf('?');
+                if (sep > 0) {
+                    NativeCore.addMapsRule(1, body.substring(0, sep), body.substring(sep + 1));
+                }
+            }
+        }
         // Unity 安装位置校验补丁：纯文件改写，与上面的 hook 开关无关，
         // 保证“清空所有 hook 痕迹”的应用也能正常启动 Unity 游戏
         try {
@@ -397,6 +421,13 @@ public class BActivityThread extends IBActivityThread.Stub {
         Application application;
         try {
             onBeforeCreateApplication(packageName, processName, packageContext);
+            // 按应用设备伪装（机器模拟）：改写 Build 字段 + hook Settings/TelephonyManager
+            // 读数。必须在 makeApplication 之前——应用 Application 类的静态初始化在
+            // makeApplication 里就会发生，提前改写才能覆盖所有首次读取点；与反检测层
+            // （hideRoot/maps 隐藏）相互独立。
+            DeviceSpoofConfig.apply(BActivityThread.getUserId(), packageName);
+            // 反多开检测：getPackageCodePath() 伪装 APK 路径（无条件，与设备伪装开关无关）
+            DeviceSpoofConfig.hookPackageCodePath(packageName);
             // 业务类尚未加载，把补丁 dex 前插到应用类加载器的 dexElements 头部
             if (packageContext != null) {
                 HotfixManager.inject(packageContext.getClassLoader(), packageName, BActivityThread.getUserId());
@@ -404,6 +435,11 @@ public class BActivityThread extends IBActivityThread.Stub {
             application = BRLoadedApk.get(loadedApk).makeApplication(false, null);
             mInitialApplication = application;
             BRActivityThread.get(BlackBoxCore.mainThread())._set_mInitialApplication(mInitialApplication);
+            // 按应用注入 so：必须在 makeApplication 之后——此时应用类已加载，应用
+            // ClassLoader 已被 ART 关联 class_loader_allocator，通过它加载 native 库
+            // 才合法（makeApplication 前加载会触发 LoadNativeLibrary CHECK 失败闪退）。
+            // 构造函数与 JNI_OnLoad 随加载自动执行，不依赖 Xposed 模块框架。
+            SoInjectConfig.inject(application.getClassLoader(), BActivityThread.getUserId(), packageName);
             ContextCompat.fix((Context) BRActivityThread.get(BlackBoxCore.mainThread()).getSystemContext());
             ContextCompat.fix(mInitialApplication);
             installProviders(mInitialApplication, bindData.processName, bindData.providers);

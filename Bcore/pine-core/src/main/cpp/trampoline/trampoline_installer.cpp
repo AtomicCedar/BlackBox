@@ -12,8 +12,6 @@
 #include "arch/arm64.h"
 #elif defined(__arm__)
 #include "arch/thumb2.h"
-#elif defined(__i386__)
-#include "arch/x86.h"
 #else
 #error unsupported architecture
 #endif
@@ -28,8 +26,6 @@ TrampolineInstaller* TrampolineInstaller::GetOrInitDefault() {
         default_ = new Arm64TrampolineInstaller;
 #elif defined(__arm__)
         default_ = new Thumb2TrampolineInstaller;
-#elif defined(__i386__)
-        default_ = new X86TrampolineInstaller;
 #endif
         default_->Init();
     }
@@ -176,7 +172,7 @@ TrampolineInstaller::InstallReplacementTrampoline(art::ArtMethod* target, art::A
     target->SetEntryPointFromCompiledCode(bridge_jump_trampoline);
     // return call_origin_trampoline;
 
-    if (PineConfig::debug)
+    if (PineConfig::debug && PineConfig::debuggable)
         LOGD("InstallReplacementTrampoline: origin %p origin_entry %p bridge_jump %p",
                 target, origin_code_entry, bridge_jump_trampoline);
 
@@ -190,7 +186,7 @@ TrampolineInstaller::InstallDirectJumpReplacementTrampoline(art::ArtMethod* targ
     if (UNLIKELY(!trampoline)) return nullptr;
     target->SetEntryPointFromCompiledCode(trampoline);
 
-    if (PineConfig::debug)
+    if (PineConfig::debug && PineConfig::debuggable)
         LOGD("InstallDirectJumpReplacementTrampoline: origin %p origin_entry %p jump_to %p",
              target, origin_code_entry, trampoline);
 
@@ -226,7 +222,7 @@ void* TrampolineInstaller::InstallInlineTrampoline(art::ArtMethod* target, art::
         }
     }
 
-    if (PineConfig::debug)
+    if (PineConfig::debug && PineConfig::debuggable)
         LOGD("InstallInlineTrampoline: target_code_addr %p backup %p bridge_jump %p",
                 target_code_addr, backup, bridge_jump_trampoline);
 
@@ -264,7 +260,7 @@ void* TrampolineInstaller::InstallDirectJumpInlineTrampoline(art::ArtMethod* tar
         }
     }
 
-    if (PineConfig::debug)
+    if (PineConfig::debug && PineConfig::debuggable)
         LOGD("InstallInlineTrampoline: target_code_addr %p backup %p jump_trampoline %p",
              target_code_addr, backup, method_jump_trampoline);
 

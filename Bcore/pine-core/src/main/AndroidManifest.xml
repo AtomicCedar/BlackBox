@@ -1,1 +1,2 @@
-<manifest package="top.canyie.pine" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="top.canyie.pine" />

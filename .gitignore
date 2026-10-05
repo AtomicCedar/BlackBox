@@ -93,3 +93,6 @@ build-log.txt
 # release signing（密钥与密码不入库）
 keystore.properties
 *.keystore
+
+# 生成机型库的工具脚本（本地维护，不入库）
+tools/

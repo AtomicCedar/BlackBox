@@ -1,10 +1,10 @@
-cmake_minimum_required(VERSION 3.4.1)
+cmake_minimum_required(VERSION 3.10)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(C_FLAGS "-Wall -Wextra -fvisibility=hidden -fvisibility-inlines-hidden -fno-exceptions -fno-rtti")
-set(LINKER_FLAGS "-fuse-ld=lld -ffixed-x18 -Wl,--hash-style=both -Wl,--unresolved-symbols=ignore-all")
+set(C_FLAGS "-Wall -Wextra -fvisibility=hidden -fvisibility-inlines-hidden -fno-exceptions -fno-rtti -flto=thin")
+set(LINKER_FLAGS "-fuse-ld=lld -flto=thin -s -ffixed-x18 -Wl,--hash-style=both -Wl,--unresolved-symbols=ignore-all")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${C_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${C_FLAGS}")
@@ -47,20 +47,21 @@ elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
             ${PINE_SOURCES}
             trampoline/arch/arm64.cpp
             trampoline/arch/arm64.S)
-elseif(CMAKE_ANDROID_ARCH_ABI STREQUAL "x86")
-    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -arch x86")
-    set(PINE_SOURCES
-            ${PINE_SOURCES}
-            trampoline/arch/x86.cpp)
 else()
-    message(FATAL_ERROR "Unsupported cpu abi ${CMAKE_ANDROID_ARCH_ABI} (Only armeabi-v7a and arm64-v8a are now supported)!")
+    message(FATAL_ERROR "Unsupported cpu abi ${CMAKE_ANDROID_ARCH_ABI}!")
 endif()
-
 add_library(pine SHARED ${PINE_SOURCES})
+add_library(pine_static STATIC ${PINE_SOURCES})
+set_target_properties(pine_static PROPERTIES OUTPUT_NAME pine)
 
 find_library(log-lib log)
-# Upstream links rikka cxx (prefab); this project uses c++_static instead
+find_package(cxx REQUIRED CONFIG)
 
-target_link_libraries(pine ${log-lib})
+# support 16KB
+target_link_options(pine PRIVATE "-Wl,-z,max-page-size=16384")
+target_link_options(pine PRIVATE "-Wl,-z,common-page-size=16384")
+
+target_link_libraries(pine ${log-lib} cxx::cxx)
+target_link_libraries(pine_static cxx::cxx)
 
 ENABLE_LANGUAGE(ASM)

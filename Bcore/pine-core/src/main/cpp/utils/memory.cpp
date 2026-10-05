@@ -34,6 +34,13 @@ void* Memory::AllocUnprotected(size_t size) {
             offset = next_offset;
             return ptr;
         }
+        // 当前页已写满,换新页前收回旧页的写权限(保留读+执行),避免长期暴露 RWX 匿名段。
+        // 所有 trampoline 的写入都发生在 ScopedSuspendVM 挂起其它线程期间,
+        // 因此换页时旧页内已分配的槽位必然已写完,可安全 mprotect。
+        int result = mprotect(reinterpret_cast<void*>(address), page_size, PROT_READ | PROT_EXEC);
+        if (UNLIKELY(result == -1))
+            LOGE("Failed to remove write permission of trampoline page %p: %s (%d)",
+                    reinterpret_cast<void*>(address), strerror(errno), errno);
     }
 
     void* mapped = mmap(nullptr, page_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -42,8 +49,8 @@ void* Memory::AllocUnprotected(size_t size) {
         LOGE("Unable to allocate executable memory: %s (%d)", strerror(errno), errno);
         return nullptr;
     }
-    if (PineConfig::debug)
-        LOGD("Mapped new memory %p (size %u)", mapped, page_size);
+    if (PineConfig::debug && PineConfig::debuggable)
+        LOGD("Mapped new memory %p (size %zu)", mapped, page_size);
 
     if (!PineConfig::anti_checks)
         prctl(PR_SET_VMA, PR_SET_VMA_ANON_NAME, mapped, size, "pine codes");

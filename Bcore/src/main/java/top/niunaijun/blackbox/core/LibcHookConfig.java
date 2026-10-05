@@ -8,7 +8,7 @@ import top.niunaijun.blackbox.utils.FileUtils;
 /**
  * 按应用禁用 libc GOT hook（NativeIOHook）的开关。
  * <p>
- * 配置是一个空标记文件：blackbox/hotfix/chook_disable/u&lt;userId&gt;/&lt;packageName&gt;，
+ * 配置是一个空标记文件：blackbox/hotfix/libchook_disable/u&lt;userId&gt;/&lt;packageName&gt;，
  * 与热修复补丁同思路——同 uid 直接读文件，无需跨进程调用，进程每次启动都拿到最新值。
  * 部分带反作弊的应用会扫描 GOT/PLT 被改写的导入函数，勾选后该应用的进程
  * 不再对 so 做 GOT hook（Java 层重定向与 JniHook 不受影响）。
